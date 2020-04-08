@@ -35,15 +35,6 @@ impl Iterator for ProcessedString<'_> {
         }
 
         let mut token = match self.skipped_char {
-            Some('.') => {
-                match self.chars.next() {
-                    Some('.') => match self.chars.next() {
-                        Some('.') => { self.skipped_char = None; return Some(String::from("...")); },
-                        c         => { self.skipped_char = c; return Some(String::from("..")); },
-                    },
-                    c         => { self.skipped_char = c; return Some(String::from(".")); }
-                }
-            }
             Some(c) if TOKEN_BREAKER.contains(&c) => {
                 self.skipped_char = None;
                 return Some(c.to_string());

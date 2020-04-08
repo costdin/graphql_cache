@@ -50,7 +50,7 @@ async fn main() {
         Err(e)  => println!("{:?}", e)
     }
 
-    let stri7 = String::from("query TheQuery{alias1: field1(id: $p1) { dob ...userFragment } alias2: field2(id: $p1, name: \"the name\") { ...userFragment } } query TheSecondQuery($p1: Int = 20){alias1: field1(id: $p1) { ...userFragment surname } alias2: field2(id: $p1, name: \"the second name\") { ...userFragment surname } } fragment userFragment on User { id name }");
+    let stri7 = String::from("query TheQuery{alias1: field1(id: $p1) { dob ...userFragment } alias2: field2(id: $p1, name: \"the name\") {...userFragment } } query TheSecondQuery($p1: Int = 20){alias1: field1(id: $p1) {...userFragment surname } alias2: field2(id: $p1, name: \"the second name\") {...userFragment surname } } fragment userFragment on User { id name }");
     let rezult7 = graphql_parser::parse_query(stri7);
     match rezult7 {
         Ok(ast) => println!("{:?}", ast),
