@@ -1,15 +1,15 @@
-pub struct ProcessedStr<'a> {
+pub struct Tokenizer<'a> {
     escaping: bool,
     in_quotes: bool,
     completed: bool,
     slice: &'a str
 }
 
-impl<'a> ProcessedStr<'a> {
-    pub fn new(string: &'a str) -> ProcessedStr<'a> {
+impl<'a> Tokenizer<'a> {
+    pub fn new(string: &'a str) -> Tokenizer<'a> {
         let slice = skip_insignificant_characters(string);
 
-        ProcessedStr {
+        Tokenizer {
             escaping: false,
             in_quotes: false,
             completed: false,
@@ -22,7 +22,7 @@ impl<'a> ProcessedStr<'a> {
 
 static TOKEN_BREAKER: &'static [char] = &[ '{', '}', '(', ')', '[', ']', ':', '=', '$', '.' ];
 
-impl<'a> Iterator for ProcessedStr<'a> {
+impl<'a> Iterator for Tokenizer<'a> {
     type Item = &'a str;
     fn next(&mut self) -> Option<Self::Item> {
         if self.completed {

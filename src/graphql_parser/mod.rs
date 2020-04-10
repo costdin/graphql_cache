@@ -1,12 +1,12 @@
-mod processed_str;
-use processed_str::ProcessedStr;
+mod tokenizer;
+use tokenizer::Tokenizer;
 
 pub fn parse_query<'a>(query: &'a str) -> Result<Document<'a>, Error> {
 
     let mut operations = Vec::<Operation>::new();
     let mut fragment_definitions = Vec::<FragmentDefinition>::new();
     let mut parser_state = ParserState { hierarchy: Vec::<&str>::new() }; 
-    let mut tokens = ProcessedStr::new(&query);
+    let mut tokens = Tokenizer::new(&query);
 
     let mut query_shorthand = true;
 
