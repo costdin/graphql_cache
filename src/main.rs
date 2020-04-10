@@ -8,7 +8,7 @@ use std::convert::Infallible;
 #[tokio::main]
 async fn main() {
     let stri = String::from("                          {    field1  (p1 :                         1,         p2:\"as        \\\"      d              \"    )     {      subf1      subf2(  p3   :0)   { s     } }}      ");
-    let rezult = graphql_parser::parse_query(stri);
+    let rezult = graphql_parser::parse_query(stri.as_str());
     match rezult {
         Ok(ast) => println!("{:?}", ast),
         Err(e)  => println!("{:?}", e)
