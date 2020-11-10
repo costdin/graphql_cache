@@ -46,10 +46,15 @@ async fn main() {
         s => println!("parser test failed: {}", s),
     };
 
-    /*    match test_things().await {
+    match test_cache_update().await {
+        Ok(()) => println!("cache update test passed"),
+        Err(s) => println!("cache update test failed"),
+    }
+
+    match test_things().await {
         Ok(()) => println!("things test passed"),
         Err(s) => println!("things test failed"),
-    }*/
+    }
 
     match test_deserializer() {
         Ok(_) => println!("deserializer test passed"),
@@ -535,17 +540,44 @@ async fn test_things() -> Result<(), graphql::parser::Error> {
         }),
     );
 
-    let query = "{f1{a: f2 f3 f4}}";
+    cache.insert(
+        String::from(r#"f1+f4_Parameter { name: "id", value: Scalar("12") }"#),
+        1000,
+        json!(121212)
+    );
+
+    cache.insert(
+        String::from(r#"f1+f4_Parameter { name: "id", value: Scalar("13") }"#),
+        1000,
+        json!(131313)
+    );
+
+    let query = "{f1{a: f2 f3 f4(id: 13)}}";
     let parsed_query = graphql::parser::parse_query(query)?;
 
     let fff = |d| send_request(d);
     match graphql::cache::process_query(parsed_query, cache, send_request).await {
-        Ok(r) => println!("{}", r.to_string()),
-        Err(e) => println!("{:?}", e),
+        Ok(r) => println!("{:#?}", r),
+        Err(e) => println!("{:?}", e)
     };
 
     Ok(())
 }
+
+async fn test_cache_update() -> Result<(), graphql::parser::Error> {
+    let cache = graphql::cache::create_cache();
+    let query = "{f1{a: f2 f3 f4(id: 13)}}";
+    let parsed_query = graphql::parser::parse_query(query)?;
+
+    let fff = |d| send_request2(d);
+    match graphql::cache::process_query(parsed_query, cache, send_request2).await {
+        Ok(r) => println!("{:#?}", r),
+        Err(e) => println!("{:?}", e)
+    };
+
+    Ok(())
+}
+
 
 /*
 
@@ -560,7 +592,7 @@ async fn send_request<'a>(
     Result<Value, graphql::parser::Error>,
     graphql::parser::Document<'a>,
 ) {
-    //println!("{:#?}", d);
+    println!("{:#?}", document);
     tokio::time::delay_for(Duration::from_secs(4)).await;
 
     let result = Ok(json!(
@@ -582,6 +614,41 @@ async fn send_request<'a>(
                         {
                             "path": [ "f1", "f4" ],
                             "maxAge": 100
+                        }
+                    ]
+                }
+            }
+        }
+    ));
+
+    (result, document)
+}
+
+async fn send_request2<'a>(
+    document: graphql::parser::Document<'a>,
+) -> (
+    Result<Value, graphql::parser::Error>,
+    graphql::parser::Document<'a>,
+) {
+    println!("{:#?}", document);
+    tokio::time::delay_for(Duration::from_secs(4)).await;
+
+    let result = Ok(json!(
+        {
+            "data": {
+                "f1": {
+                    "a": 55,
+                    "f3": 777,
+                    "f4": 123
+                }
+            },
+            "extensions": {
+                "cacheControl": {
+                    "version": 1,
+                    "hints": [
+                        {
+                            "path": ["f1"],
+                            "maxAge": 2000
                         }
                     ]
                 }

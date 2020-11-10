@@ -119,7 +119,7 @@ fn explode<'a>(
 ) -> Vec<(Value, String)> {
     let x = (
         value,
-        get_cache_key(field.get_name(), field.get_parameters()),
+        field_to_cache_key(field),
     );
     vec![x]
 }
@@ -148,15 +148,16 @@ fn explode_recursive<'a>(
             fields: subfields,
         } if parameters.len() > 0 => match accumulator.pop() {
             Some((Value::Object(mut last_value), cache_name)) => {
-                let residual = last_value.remove(*name).unwrap();
+                let field_alias = alias.unwrap_or(name);
+                let residual = last_value.remove(field_alias).unwrap();
                 accumulator.push((Value::Object(last_value), cache_name));
 
                 let k = traversed_fields
                     .iter()
-                    .map(|f| (f.get_name(), f.get_parameters()))
+                    .map(|f| field_to_cache_key(f))
                     .collect::<Vec<_>>();
 
-                //accumulator.push((residual, get_deep_cache_key(k.as_slice(), field)));
+                accumulator.push((residual.clone(), get_deep_cache_key(k.as_slice(), field)));
                 (subfields, residual)
             }
             _ => return accumulator,
@@ -172,31 +173,35 @@ fn explode_recursive<'a>(
 
     let new_traversed_fields = [traversed_fields, &vec![field]].concat();
     for subfield in subfields {
-        //explode_recursive(subfield, new_traversed_fields, accumulator);
+        explode_recursive(new_value, subfield, &new_traversed_fields, accumulator);
     }
 
     accumulator
 }
 
-
-
 fn match_field_with_cache<'a>(
     field: Field<'a>,
     cache: &cache::Cache<String, Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
-    match_field_with_cache_recursive(&mut Vec::new(), field, None, &cache)
+    match get_deep_cached_item(&[], &field, cache) {
+        Ok(Value::Object(mut v)) => {
+            let cached_value = v.remove(field.get_name());
+            match_field_with_cache_recursive(&mut Vec::new(), field, cached_value, &cache)
+        },
+        _ => (Some(field), None)
+    }
 }
 
 // takes a query field, the already processed cached fields and the new cache
 fn match_field_with_cache_recursive<'a>(
-    stack: &mut std::vec::Vec<(&'a str, Vec<Parameter<'a>>)>,
+    stack: &mut Vec<String>,
     field: Field<'a>,
     cached_value_option: Option<Value>,
     cache: &cache::Cache<String, Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
     let cached_value = match (field.has_parameters(), cached_value_option) {
-        (has_parameters, cache_value) if has_parameters || cache_value.is_none() => {
-            match get_deep_cached_item(&stack, &field, cache) {
+        (has_parameters, _) if has_parameters => {
+            match get_deep_cached_item(stack, &field, cache) {
                 Ok(c) => c,
                 Err(_) => return (Some(field), None),
             }
@@ -220,17 +225,18 @@ fn match_field_with_cache_recursive<'a>(
         _ => return (Some(field), None),
     };
 
-    let (alias, name, parameters, subfields) = match field {
+    let cache_key = field_to_cache_key(&field);
+    let (alias, name, subfields) = match field {
         Field::Field {
             alias,
             name,
-            parameters,
+            parameters: _,
             fields,
-        } => (alias, name, parameters, fields),
+        } => (alias, name, fields),
         _ => return (Some(field), None),
     };
 
-    stack.push((name, parameters));
+    stack.push(cache_key);
 
     let mut value_from_cache = Map::new();
     let mut residual_subfields = Vec::<Field>::new();
@@ -276,13 +282,13 @@ fn match_field_with_cache_recursive<'a>(
     (residual_field_result, cache_result)
 }
 
-fn get_cache_key<'a>(field_name: &str, parameters: &[Parameter]) -> String {
-    if parameters.len() == 0 {
-        field_name.to_string()
+fn field_to_cache_key<'a>(field: &Field<'a>) -> String {
+    if field.get_parameters().len() == 0 {
+        field.get_name().to_string()
     } else {
-        field_name.to_string()
+        field.get_name().to_string()
             + "_"
-            + parameters
+            + field.get_parameters()
                 .iter()
                 .map(|p| format!("{:?}", p))
                 .collect::<Vec<_>>()
@@ -292,27 +298,22 @@ fn get_cache_key<'a>(field_name: &str, parameters: &[Parameter]) -> String {
 }
 
 fn get_deep_cache_key<'a>(
-    stack: &[(&'a str, Vec<Parameter<'a>>)],
+    cache_keys_path: &[String],
     current_item: &Field<'a>,
 ) -> String {
-    let mut vec = stack
-        .iter()
-        .map(|f| get_cache_key(f.0, &f.1))
-        .collect::<Vec<String>>();
-    vec.push(get_cache_key(
-        current_item.get_name(),
-        current_item.get_parameters(),
-    ));
-
-    vec.join("+")
+    if cache_keys_path.len() > 0 {
+        cache_keys_path.join("+") + "+" + &field_to_cache_key(current_item)    
+    } else {
+        field_to_cache_key(current_item)
+    }
 }
 
 fn get_deep_cached_item<'a>(
-    stack: &[(&'a str, Vec<Parameter<'a>>)],
+    cache_keys_path: &[String],
     current_item: &Field<'a>,
     cache: &cache::Cache<String, Value>,
 ) -> Result<Value, Error> {
-    let cache_key = get_deep_cache_key(stack, current_item);
+    let cache_key = get_deep_cache_key(cache_keys_path, current_item);
 
     match cache.get(&cache_key) {
         Some(field_cache) => {
