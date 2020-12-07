@@ -14,6 +14,25 @@ pub fn merge_json(a: &mut Value, b: Value) {
     }
 }
 
+pub fn extract_mut(json_value: &mut Value, path: &[String]) -> Option<Value> {
+    if path.len() == 1 {
+        match json_value {
+            Value::Object(v) => match v.remove(&path[0]) {
+                r @ Some(_) => r,
+                None => None,
+            },
+            _ => None,
+        }
+    } else {
+        match json_value {
+            Value::Object(v) if v.contains_key(&path[0]) => {
+                extract_mut(v.get_mut(&path[0]).unwrap(), &path[1..])
+            }
+            _ => None,
+        }
+    }
+}
+
 pub fn extract(json_value: &Value, path: &[String]) -> Option<Value> {
     if path.len() == 0 {
         return Some(json_value.clone());

@@ -543,13 +543,13 @@ async fn test_things() -> Result<(), graphql::parser::Error> {
     cache.insert(
         String::from(r#"f1+f4_Parameter { name: "id", value: Scalar("12") }"#),
         1000,
-        json!(121212)
+        json!(121212),
     );
 
     cache.insert(
         String::from(r#"f1+f4_Parameter { name: "id", value: Scalar("13") }"#),
         1000,
-        json!(131313)
+        json!(131313),
     );
 
     let query = "{f1{a: f2 f3 f4(id: 13)}}";
@@ -558,7 +558,7 @@ async fn test_things() -> Result<(), graphql::parser::Error> {
     let fff = |d| send_request(d);
     match graphql::cache::process_query(parsed_query, cache, send_request).await {
         Ok(r) => println!("{:#?}", r),
-        Err(e) => println!("{:?}", e)
+        Err(e) => println!("{:?}", e),
     };
 
     Ok(())
@@ -566,18 +566,58 @@ async fn test_things() -> Result<(), graphql::parser::Error> {
 
 async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     let cache = graphql::cache::create_cache();
-    let query = "{f1{a: f2 f3 f4(id: 13)}}";
-    let parsed_query = graphql::parser::parse_query(query)?;
+    let query1 = "{f1{f2 f3 a1: f4(id: 13) a2: f4(id: 11)}}";
+    let query2 = "{f1{f2 f3 f4(id: 13) a2: f4(id: 11)}}";
+    let query3 = "{f1{f2 f3 f4(id: 13)}}";
+    let query4 = "{f1{f2 f3 a22222: f4(id: 11)}}";
+    let parsed_query = graphql::parser::parse_query(query1)?;
+    let parsed_query2 = graphql::parser::parse_query(query2)?;
+    let parsed_query3 = graphql::parser::parse_query(query3)?;
+    let parsed_query4 = graphql::parser::parse_query(query4)?;
 
-    let fff = |d| send_request2(d);
-    match graphql::cache::process_query(parsed_query, cache, send_request2).await {
+    match graphql::cache::process_query(parsed_query, cache.clone(), send_request2).await {
         Ok(r) => println!("{:#?}", r),
-        Err(e) => println!("{:?}", e)
+        Err(e) => println!("{:?}", e),
+    };
+
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+
+    match graphql::cache::process_query(parsed_query2, cache.clone(), send_request2).await {
+        Ok(r) => println!("{:#?}", r),
+        Err(e) => println!("{:?}", e),
+    };
+
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+
+    match graphql::cache::process_query(parsed_query3, cache.clone(), send_request2).await {
+        Ok(r) => println!("{:#?}", r),
+        Err(e) => println!("{:?}", e),
+    };
+
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+
+    match graphql::cache::process_query(parsed_query4, cache, send_request2).await {
+        Ok(r) => println!("{:#?}", r),
+        Err(e) => println!("{:?}", e),
     };
 
     Ok(())
 }
-
 
 /*
 
@@ -631,15 +671,15 @@ async fn send_request2<'a>(
     graphql::parser::Document<'a>,
 ) {
     println!("{:#?}", document);
-    tokio::time::delay_for(Duration::from_secs(4)).await;
 
     let result = Ok(json!(
         {
             "data": {
                 "f1": {
-                    "a": 55,
+                    "f2": 55,
                     "f3": 777,
-                    "f4": 123
+                    "a1": 123,
+                    "a2": 111
                 }
             },
             "extensions": {

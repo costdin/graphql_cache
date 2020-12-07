@@ -644,10 +644,7 @@ impl<'a> Traversable<'a> for Field<'a> {
         } else {
             match self {
                 Field::Field {
-                    alias: _,
-                    name: _,
-                    parameters: _,
-                    fields: subfields,
+                    fields: subfields, ..
                 } => match subfields.iter().filter(|s| path[0] == s.get_alias()).nth(0) {
                     Some(f) => match f.traverse(&path[1..]) {
                         Some((mut traversed, field)) => {
@@ -685,24 +682,21 @@ impl<'a> Field<'a> {
 
     pub fn has_parameters(&self) -> bool {
         match self {
-            Field::Field {
-                alias: _,
-                name: _,
-                parameters,
-                fields: _,
-            } => parameters.len() > 0,
+            Field::Field { parameters, .. } => parameters.len() > 0,
+            _ => false,
+        }
+    }
+
+    pub fn has_alias(&self) -> bool {
+        match self {
+            Field::Field { alias, .. } => alias.is_some(),
             _ => false,
         }
     }
 
     pub fn children_with_parameters(&self) -> Vec<Vec<&Field>> {
         match self {
-            Field::Field {
-                alias: _,
-                name: _,
-                parameters: _,
-                fields,
-            } => {
+            Field::Field { fields, .. } => {
                 let mut result = vec![];
                 for subfield in fields {
                     if subfield.has_parameters() {
@@ -723,60 +717,35 @@ impl<'a> Field<'a> {
 
     pub fn is_leaf(&self) -> bool {
         match self {
-            Field::Field {
-                alias: _,
-                name: _,
-                parameters: _,
-                fields,
-            } => fields.len() == 0,
+            Field::Field { fields, .. } => fields.len() == 0,
             _ => false,
         }
     }
 
     pub fn get_name(&self) -> &str {
         match self {
-            Field::Field {
-                alias: _,
-                name,
-                parameters: _,
-                fields: _,
-            } => name,
+            Field::Field { name, .. } => name,
             _ => &"",
         }
     }
 
     pub fn get_alias(&self) -> &str {
         match self {
-            Field::Field {
-                alias,
-                name,
-                parameters: _,
-                fields: _,
-            } => alias.unwrap_or(name),
+            Field::Field { alias, name, .. } => alias.unwrap_or(name),
             _ => &"",
         }
     }
 
     pub fn get_parameters(&self) -> &[Parameter] {
         match self {
-            Field::Field {
-                alias: _,
-                name: _,
-                parameters,
-                fields: _,
-            } => &parameters,
+            Field::Field { parameters, .. } => &parameters,
             _ => EMPTY_PARAMETER_LIST,
         }
     }
 
-    pub fn get_subfield(&self) -> &[Field<'a>] {
+    pub fn get_subfields(&self) -> &[Field<'a>] {
         match self {
-            Field::Field {
-                alias: _,
-                name: _,
-                parameters: _,
-                fields,
-            } => &fields,
+            Field::Field { fields, .. } => &fields,
             _ => EMPTY_FIELD_LIST,
         }
     }

@@ -1,12 +1,13 @@
 pub mod cache;
-use crate::graphql::json::merge_json;
+use crate::graphql::json::{extract_mut, merge_json};
 use crate::graphql::parser::{
-    expand_operation, Document, Error, Field, Operation, OperationType, Parameter, Traversable,
+    expand_operation, Document, Error, Field, Operation, OperationType, Traversable,
 };
 use crate::graphql_deserializer::{CacheHint, CacheScope, GraphQLResponse};
 use serde_json::map::Map;
 use serde_json::value::Value;
 use serde_json::{from_value, json};
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -101,113 +102,127 @@ fn update_cache<'a>(
     cache_hints: Vec<(Value, CacheHint)>,
     query: &Operation<'a>,
 ) {
-    for (value, mut hint) in cache_hints
+    for (value, hint) in cache_hints
         .into_iter()
         .filter(|h| h.1.scope == CacheScope::PUBLIC && h.1.path.len() > 0)
     {
         let (traversed_fields, cached_field) = query.traverse(&hint.path).unwrap();
-        for (value, cache_key) in explode(value, cached_field, &traversed_fields) {
-            cache.insert(cache_key, hint.max_age, value);
+        for (cache_key, cache_value) in get_cache_values(traversed_fields, cached_field, value) {
+            cache.insert(cache_key, hint.max_age, cache_value);
         }
     }
 }
 
-fn explode<'a>(
-    value: Value,
-    field: &Field<'a>,
-    traversed_fields: &[&Field<'a>],
-) -> Vec<(Value, String)> {
-    let x = (
-        value,
-        field_to_cache_key(field),
-    );
-    vec![x]
+fn get_cache_values<'a>(
+    initial_path: Vec<&'a Field<'a>>,
+    field: &'a Field<'a>,
+    mut value: Value,
+) -> Vec<(String, Value)> {
+    let mut cacheable_fields = get_cacheable_fields(field, initial_path);
+    // reverse collection so that fields closest to the root
+    // are processed last
+    cacheable_fields.sort_by(|path1, path2| path2.len().cmp(&path1.len()));
+
+    cacheable_fields
+        .into_iter()
+        .map(|fields| {
+            (
+                fields_to_cache_key(&fields),
+                extract_mut(&mut value, &fields_to_json_path(&fields)),
+                fields,
+            )
+        })
+        .filter(|(_, v, _)| v.is_some())
+        .map(|(cache_key, v, path)| (cache_key, v.unwrap(), path))
+        .map(|(cache_key, v, path)| (cache_key, dealias_fields(v, &path)))
+        .collect::<Vec<_>>()
 }
 
-//fn explode_recursive<'a>(
-//    value: Value,
-//    field: &Field<'a>,
-//    traversed_fields: &[&Field<'a>],
-//    accumulator: Vec<(Value, String)>,
-//) -> Vec<(Value, String)> {
-//    accumulator.push((value, get_deep_cache_key(traversed_fields, field)))
-//}
+fn fields_to_json_path(fields: &[&Field]) -> Vec<String> {
+    fields
+        .iter()
+        .map(|f| String::from(f.get_alias()))
+        .collect::<Vec<_>>()
+}
 
+fn dealias_fields(mut json_value: Value, path: &[&Field]) -> Value {
+    dealias_path_recursive(&mut json_value, path);
 
-fn explode_recursive<'a>(
-    value: Value,
-    field: &Field<'a>,
-    traversed_fields: &'a [&Field<'a>],
-    mut accumulator: Vec<(Value, String)>,
-) -> Vec<(Value, String)> {
-    let (subfields, new_value) = match field {
-        Field::Field {
-            name,
-            alias,
-            parameters,
-            fields: subfields,
-        } if parameters.len() > 0 => match accumulator.pop() {
-            Some((Value::Object(mut last_value), cache_name)) => {
-                let field_alias = alias.unwrap_or(name);
-                let residual = last_value.remove(field_alias).unwrap();
-                accumulator.push((Value::Object(last_value), cache_name));
+    json_value
+}
 
-                let k = traversed_fields
-                    .iter()
-                    .map(|f| field_to_cache_key(f))
-                    .collect::<Vec<_>>();
-
-                accumulator.push((residual.clone(), get_deep_cache_key(k.as_slice(), field)));
-                (subfields, residual)
-            }
-            _ => return accumulator,
-        },
-        Field::Field {
-            name,
-            alias,
-            parameters,
-            fields: subfields,
-        } => (subfields, value),
-        Field::Fragment { name: _ } => return accumulator,
+fn dealias_path_recursive(json_value: &mut Value, path: &[&Field]) {
+    let (current_field, path_remainder): (&Field, &[&Field]) = match path {
+        [] => return,
+        [elem] => {
+            dealias_field(json_value, *elem);
+            return;
+        }
+        p => (*p.iter().nth(0).unwrap(), &p[1..]),
     };
 
-    let new_traversed_fields = [traversed_fields, &vec![field]].concat();
-    for subfield in subfields {
-        explode_recursive(new_value, subfield, &new_traversed_fields, accumulator);
-    }
+    let (name, alias) = (current_field.get_name(), current_field.get_alias());
 
-    accumulator
+    let map = match json_value {
+        Value::Object(map) => map,
+        _ => return,
+    };
+    let mut v = map.remove(alias).unwrap();
+    dealias_path_recursive(&mut v, path_remainder);
+
+    map.insert(String::from(name), v);
+}
+
+fn dealias_field(json_value: &mut Value, current_field: &Field) {
+    let (name, alias) = (current_field.get_name(), current_field.get_alias());
+
+    let map = match json_value {
+        Value::Object(map) => map,
+        _ => return,
+    };
+
+    match map.remove(alias) {
+        Some(mut v) => {
+            for subfield in current_field.get_subfields() {
+                dealias_field(&mut v, subfield);
+            }
+
+            map.insert(String::from(name), v);
+        }
+        _ => {}
+    }
 }
 
 fn match_field_with_cache<'a>(
     field: Field<'a>,
     cache: &cache::Cache<String, Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
-    match get_deep_cached_item(&[], &field, cache) {
-        Ok(Value::Object(mut v)) => {
-            let cached_value = v.remove(field.get_name());
-            match_field_with_cache_recursive(&mut Vec::new(), field, cached_value, &cache)
-        },
-        _ => (Some(field), None)
+    let mut cached_items = get_cached_item(&field, cache);
+
+    if cached_items.len() > 0 {
+        let cached_value = cached_items.remove(&field_to_cache_key(&field));
+        match_field_with_cache_recursive(&mut Vec::new(), field, cached_value, &mut cached_items)
+    } else {
+        (Some(field), None)
     }
 }
 
-// takes a query field, the already processed cached fields and the new cache
 fn match_field_with_cache_recursive<'a>(
     stack: &mut Vec<String>,
     field: Field<'a>,
     cached_value_option: Option<Value>,
-    cache: &cache::Cache<String, Value>,
+    cache: &mut HashMap<String, Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
-    let cached_value = match (field.has_parameters(), cached_value_option) {
-        (has_parameters, _) if has_parameters => {
-            match get_deep_cached_item(stack, &field, cache) {
-                Ok(c) => c,
-                Err(_) => return (Some(field), None),
-            }
-        }
-        (_, Some(c)) => c,
-        _ => return (Some(field), None),
+    let asd = if field.has_parameters() {
+        let key = concatenate_cache_keys(stack, &field);
+        cache.remove(&key)
+    } else {
+        cached_value_option
+    };
+
+    let cached_value = match asd {
+        Some(v) => v,
+        _ => Value::Object(Map::new()),
     };
 
     if field.is_leaf() {
@@ -222,21 +237,20 @@ fn match_field_with_cache_recursive<'a>(
 
     let mut cache_map = match cached_value {
         Value::Object(map) => map,
-        _ => return (Some(field), None),
+        _ => Map::new(),
     };
 
-    let cache_key = field_to_cache_key(&field);
+    stack.push(field_to_cache_key(&field));
+
     let (alias, name, subfields) = match field {
         Field::Field {
             alias,
             name,
-            parameters: _,
             fields,
+            ..
         } => (alias, name, fields),
         _ => return (Some(field), None),
     };
-
-    stack.push(cache_key);
 
     let mut value_from_cache = Map::new();
     let mut residual_subfields = Vec::<Field>::new();
@@ -244,6 +258,7 @@ fn match_field_with_cache_recursive<'a>(
         let subfield_name = subfield.get_name();
         let subfield_alias = String::from(subfield.get_alias());
         let field_from_cache = cache_map.remove(subfield_name);
+
         let (residual_subfield, from_cache) =
             match_field_with_cache_recursive(stack, subfield, field_from_cache, cache);
 
@@ -288,7 +303,8 @@ fn field_to_cache_key<'a>(field: &Field<'a>) -> String {
     } else {
         field.get_name().to_string()
             + "_"
-            + field.get_parameters()
+            + field
+                .get_parameters()
                 .iter()
                 .map(|p| format!("{:?}", p))
                 .collect::<Vec<_>>()
@@ -297,38 +313,71 @@ fn field_to_cache_key<'a>(field: &Field<'a>) -> String {
     }
 }
 
-fn get_deep_cache_key<'a>(
-    cache_keys_path: &[String],
-    current_item: &Field<'a>,
-) -> String {
-    if cache_keys_path.len() > 0 {
-        cache_keys_path.join("+") + "+" + &field_to_cache_key(current_item)    
-    } else {
-        field_to_cache_key(current_item)
-    }
+fn concatenate_cache_keys<'a>(cache_keys: &[String], field: &Field<'a>) -> String {
+    cache_keys.join("+") + "+" + &field_to_cache_key(field).as_str()
 }
 
-fn get_deep_cached_item<'a>(
-    cache_keys_path: &[String],
-    current_item: &Field<'a>,
+fn fields_to_cache_key<'a>(fields: &[&Field<'a>]) -> String {
+    fields
+        .iter()
+        .map(|f| field_to_cache_key(f))
+        .collect::<Vec<String>>()
+        .join("+")
+}
+
+fn get_cached_item<'a>(
+    root_field: &Field<'a>,
     cache: &cache::Cache<String, Value>,
-) -> Result<Value, Error> {
-    let cache_key = get_deep_cache_key(cache_keys_path, current_item);
+) -> HashMap<String, Value> {
+    let cachable_fields = get_cacheable_fields(root_field, vec![]);
+    let mut result = HashMap::new();
 
-    match cache.get(&cache_key) {
-        Some(field_cache) => {
+    if cachable_fields.len() > 0 {
+        for field_path in cachable_fields {
             let mut cached_value = json!({});
-            for x in field_cache.into_iter() {
-                merge_json(&mut cached_value, (*x).clone())
-            }
+            let cache_key = fields_to_cache_key(&field_path);
 
-            Ok(cached_value)
+            match cache.get(&cache_key) {
+                Some(field_cache) => {
+                    for x in field_cache.into_iter() {
+                        merge_json(&mut cached_value, (*x).clone())
+                    }
+
+                    result.insert(cache_key, cached_value);
+                }
+                None => {}
+            }
         }
-        None => Ok(json!({})),
     }
+
+    result
 }
 
-struct key_items<'a> {
-    name: &'a str,
-    parameters: Vec<Parameter<'a>>,
+fn get_cacheable_fields<'a>(
+    field: &'a Field<'a>,
+    mut initial_path: Vec<&'a Field<'a>>,
+) -> Vec<Vec<&'a Field<'a>>> {
+    let mut cachable_fields = vec![vec![field]];
+
+    extract_fields_with_parameters_recursive(field, &mut initial_path, &mut cachable_fields);
+
+    cachable_fields
+}
+
+fn extract_fields_with_parameters_recursive<'a>(
+    field: &'a Field<'a>,
+    stack: &mut Vec<&'a Field<'a>>,
+    accumulator: &mut Vec<Vec<&'a Field<'a>>>,
+) {
+    stack.push(field);
+
+    if field.has_parameters() {
+        accumulator.push(stack.clone());
+    }
+
+    for subfield in field.get_subfields() {
+        extract_fields_with_parameters_recursive(subfield, stack, accumulator);
+    }
+
+    stack.pop();
 }

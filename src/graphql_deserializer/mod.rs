@@ -1,7 +1,6 @@
 use crate::graphql::json::{extract, merge_json, remove_field};
 use serde;
 use serde::Deserialize;
-use serde_json::json;
 use serde_json::Value;
 use std::cmp::Ordering;
 
@@ -12,11 +11,11 @@ pub struct GraphQLResponse {
 }
 
 impl GraphQLResponse {
-    pub fn merge(&mut self, data: Value) {
-        merge_json(&mut self.data, data);
-    }
-
     pub fn compress_cache_hints(mut self) -> (Value, Vec<(Value, CacheHint)>) {
+        if self.extensions.cache_control.hints.len() == 0 {
+            return (self.data, vec![]);
+        }
+
         self.extensions.cache_control.hints.sort_by(order_hints);
 
         let mut compressed_hints = Vec::<(Value, CacheHint)>::new();
@@ -52,8 +51,6 @@ impl GraphQLResponse {
 
         stack.retain(|(value, _)| !value.is_null());
         compressed_hints.extend(stack);
-
-        println!("{:?}", compressed_hints);
 
         return (self.data, compressed_hints);
     }
