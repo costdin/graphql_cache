@@ -23,7 +23,10 @@ impl<K: 'static + Hash + Eq + Send + Sync, T: 'static + Sync + Send> Drop for Ca
     fn drop(&mut self) {
         println!("Dropping");
 
-        self.stop_loop_sender.lock().unwrap().send(());
+        match self.stop_loop_sender.lock().unwrap().send(()) {
+            Ok(_) => { },
+            Err(_) => println!("Error while signaling cache loop to stop")
+        }
 
         match self.thread_completed_receiver.lock().unwrap().recv() {
             Ok(_) => println!("Cleanup thread terminated"),
