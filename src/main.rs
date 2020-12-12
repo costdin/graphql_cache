@@ -26,8 +26,19 @@ struct D {
     ccc: String,
 }
 
+fn asd(i: &i8) {
+    if i > &3 {
+        println!("Ok");
+    } else {
+        println!("No");
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    let i: i8 = 18;
+    asd(&i);
+
     let data = r#"
     {
         "data": 12
@@ -570,7 +581,8 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     let query2 = "{f1{f2 f3 f4(id: 13) a2: f4(id: 11)}}";
     let query3 = "{f1{f2 f3 f4(id: 13)}}";
     let query4 = "{f1{f2 f3 a22222: f4(id: 11)}}";
-    let query5 = "query {f1 { f2 ...fr }} fragment fr on User { fffff413: f4(id: 13) fffff411: f4(id: 11) }";
+    let query5 =
+        "query {f1 { f2 ...fr }} fragment fr on User { fffff413: f4(id: 13) fffff411: f4(id: 11) }";
     let parsed_query = graphql::parser::parse_query(query1)?;
     let parsed_query2 = graphql::parser::parse_query(query2)?;
     let parsed_query3 = graphql::parser::parse_query(query3)?;

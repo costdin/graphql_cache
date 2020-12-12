@@ -24,8 +24,8 @@ impl<K: 'static + Hash + Eq + Send + Sync, T: 'static + Sync + Send> Drop for Ca
         println!("Dropping");
 
         match self.stop_loop_sender.lock().unwrap().send(()) {
-            Ok(_) => { },
-            Err(_) => println!("Error while signaling cleanup thread to stop")
+            Ok(_) => {}
+            Err(_) => println!("Error while signaling cleanup thread to stop"),
         }
 
         match self.thread_completed_receiver.lock().unwrap().recv() {

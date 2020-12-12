@@ -133,8 +133,7 @@ fn get_cache_values<'a>(
             )
         })
         .filter(|(_, v, _)| v.is_some())
-        .map(|(cache_key, v, path)| (cache_key, v.unwrap(), path))
-        .map(|(cache_key, v, path)| (cache_key, dealias_fields(v, &path)))
+        .map(|(cache_key, v, path)| (cache_key, dealias_fields(v.unwrap(), &path)))
         .collect::<Vec<_>>()
 }
 
@@ -197,46 +196,30 @@ fn match_field_with_cache<'a>(
     field: Field<'a>,
     cache: &cache::Cache<String, Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
-    let mut cached_items = get_cached_item(&field, cache);
-
-    if cached_items.len() > 0 {
-        let cached_value = cached_items.remove(&field_to_cache_key(&field));
-        match_field_with_cache_recursive(&mut Vec::new(), field, cached_value, &mut cached_items)
-    } else {
-        (Some(field), None)
-    }
+    let cached_value = get_cached_item(&field_to_cache_key(&field), cache);
+    match_field_with_cache_recursive(&mut Vec::new(), field, cached_value, cache)
 }
 
 fn match_field_with_cache_recursive<'a>(
     stack: &mut Vec<String>,
     field: Field<'a>,
-    cached_value_option: Option<Value>,
-    cache: &mut HashMap<String, Value>,
+    cached_value: Option<Value>,
+    cache: &cache::Cache<String, Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
-    let asd = if field.has_parameters() {
-        let key = concatenate_cache_keys(stack, &field);
-        cache.remove(&key)
-    } else {
-        cached_value_option
-    };
-
-    let cached_value = match asd {
-        Some(v) => v,
-        _ => Value::Object(Map::new()),
-    };
-
     if field.is_leaf() {
         return match cached_value {
-            v @ Value::String(_) => (None, Some(v)),
-            v @ Value::Bool(_) => (None, Some(v)),
-            v @ Value::Number(_) => (None, Some(v)),
-            Value::Array(a) if a.len() > 0 && !a[0].is_object() => (None, Some(Value::Array(a))),
+            Some(v @ Value::String(_)) => (None, Some(v)),
+            Some(v @ Value::Bool(_)) => (None, Some(v)),
+            Some(v @ Value::Number(_)) => (None, Some(v)),
+            Some(Value::Array(a)) if a.len() > 0 && !a[0].is_object() => {
+                (None, Some(Value::Array(a)))
+            }
             _ => (Some(field), None),
         };
     }
 
     let mut cache_map = match cached_value {
-        Value::Object(map) => map,
+        Some(Value::Object(map)) => map,
         _ => Map::new(),
     };
 
@@ -252,12 +235,36 @@ fn match_field_with_cache_recursive<'a>(
         _ => return (Some(field), None),
     };
 
+    // produce a map of parameterless fields with the same name
+    // we use this in the next loop to get fields from the cache
+    // if a field is unique, then we can remove it from cached_value
+    // if a field is not unique, then we have to clone it
+    let mut subfield_map = HashMap::<String, i8>::new();
+    for s in subfields.iter().filter(|s| !s.has_parameters()) {
+        *subfield_map.entry(s.get_name().to_string()).or_insert(0) += 1;
+    }
+
     let mut value_from_cache = Map::new();
     let mut residual_subfields = Vec::<Field>::new();
     for subfield in subfields {
         let subfield_name = subfield.get_name();
         let subfield_alias = String::from(subfield.get_alias());
-        let field_from_cache = cache_map.remove(subfield_name);
+
+        // If a subfield have parameters, then get it from the cache
+        // else if a subfield is unique, then extract the cache value from the cache object
+        // else clone the cache value (so it can be used by the next duplicate)
+        let field_from_cache = if subfield.has_parameters() {
+            let key = concatenate_cache_keys(stack, &subfield);
+            get_cached_item(&key, cache)
+        } else {
+            match subfield_map.get_mut(subfield.get_name()) {
+                Some(v) if v > &mut 1 => {
+                    *v -= 1;
+                    Some(cache_map[subfield_name].clone())
+                }
+                _ => cache_map.remove(subfield_name),
+            }
+        };
 
         let (residual_subfield, from_cache) =
             match_field_with_cache_recursive(stack, subfield, field_from_cache, cache);
@@ -325,32 +332,19 @@ fn fields_to_cache_key<'a>(fields: &[&Field<'a>]) -> String {
         .join("+")
 }
 
-fn get_cached_item<'a>(
-    root_field: &Field<'a>,
-    cache: &cache::Cache<String, Value>,
-) -> HashMap<String, Value> {
-    let cachable_fields = get_cacheable_fields(root_field, vec![]);
-    let mut result = HashMap::new();
+fn get_cached_item<'a>(cache_key: &String, cache: &cache::Cache<String, Value>) -> Option<Value> {
+    let mut cached_value = json!({});
 
-    if cachable_fields.len() > 0 {
-        for field_path in cachable_fields {
-            let mut cached_value = json!({});
-            let cache_key = fields_to_cache_key(&field_path);
-
-            match cache.get(&cache_key) {
-                Some(field_cache) => {
-                    for x in field_cache.into_iter() {
-                        merge_json(&mut cached_value, (*x).clone())
-                    }
-
-                    result.insert(cache_key, cached_value);
-                }
-                None => {}
+    match cache.get(&cache_key) {
+        Some(field_cache) => {
+            for x in field_cache.into_iter() {
+                merge_json(&mut cached_value, (*x).clone())
             }
-        }
-    }
 
-    result
+            Some(cached_value)
+        }
+        None => None,
+    }
 }
 
 fn get_cacheable_fields<'a>(
