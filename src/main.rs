@@ -87,16 +87,19 @@ async fn main() {
         s => println!("cache test failed: {}", s),
     };
 
-    /*    let cache = graphql::cache::create_cache();
+    let cache = graphql::cache::create_cache();
+
+    let authToken = warp::cookie::optional("auth_token");
 
     let routes = warp::path("hello")
         .and(warp::path::param())
         .and(warp::header("user-agent"))
         .and(warp::addr::remote())
         .and(warp::body::json())
-        .and_then(move |a, b, c, d| stuff(a, b, c, d, cache.clone()));
+        .and(authToken)
+        .and_then(move |a, b, c, d, auth_token| stuff(a, b, c, d, auth_token, cache.clone()));
 
-    warp::serve(routes).run(([127, 0, 0, 1], 3030)).await; */
+    warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 }
 
 pub struct the_struct<'a> {
@@ -567,7 +570,7 @@ async fn test_things() -> Result<(), graphql::parser::Error> {
     let parsed_query = graphql::parser::parse_query(query)?;
 
     let fff = |d| send_request(d);
-    match graphql::cache::process_query(parsed_query, cache, send_request).await {
+    match graphql::cache::process_query(parsed_query, cache, None, send_request).await {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -589,7 +592,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     let parsed_query4 = graphql::parser::parse_query(query4)?;
     let parsed_query5 = graphql::parser::parse_query(query5)?;
 
-    match graphql::cache::process_query(parsed_query, cache.clone(), send_request2).await {
+    match graphql::cache::process_query(parsed_query, cache.clone(), None, send_request2).await {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -601,7 +604,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::process_query(parsed_query2, cache.clone(), send_request2).await {
+    match graphql::cache::process_query(parsed_query2, cache.clone(), None, send_request2).await {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -613,7 +616,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::process_query(parsed_query3, cache.clone(), send_request2).await {
+    match graphql::cache::process_query(parsed_query3, cache.clone(), None, send_request2).await {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -625,7 +628,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::process_query(parsed_query4, cache.clone(), send_request2).await {
+    match graphql::cache::process_query(parsed_query4, cache.clone(), None, send_request2).await {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -637,7 +640,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::process_query(parsed_query5, cache, send_request2).await {
+    match graphql::cache::process_query(parsed_query5, cache, None, send_request2).await {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -715,6 +718,10 @@ async fn send_request2<'a>(
                         {
                             "path": ["f1"],
                             "maxAge": 2000
+                        },
+                        {
+                            "path": ["f1", "f2"],
+                            "maxAge": 1000
                         }
                     ]
                 }
@@ -740,6 +747,7 @@ async fn stuff(
     agent: String,
     addr_opt: Option<SocketAddr>,
     body: HashMap<String, String>,
+    auth_token: Option<String>,
     cache: Arc<graphql::cache::cache::Cache<String, Value>>,
 ) -> Result<impl warp::Reply, Infallible> {
     let query = match body.get("query") {
@@ -750,7 +758,7 @@ async fn stuff(
         None => return Ok(format!("no")),
     };
 
-    let result = match graphql::cache::process_query(query, cache, send_request).await {
+    let result = match graphql::cache::process_query(query, cache, None, send_request).await {
         Ok(r) => format!("{}", r.to_string()),
         Err(e) => format!("{:?}", e),
     };

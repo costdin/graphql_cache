@@ -21,6 +21,7 @@ pub fn create_cache() -> Arc<cache::Cache<String, Value>> {
 pub async fn process_query<'a, Fut>(
     document: Document<'a>,
     cache: Arc<cache::Cache<String, Value>>,
+    user_id: Option<String>,
     get_fn: impl Fn(Document<'a>) -> Fut,
 ) -> Result<Value, Error>
 where
@@ -47,7 +48,7 @@ where
         let mut residual_fields = Vec::<Field>::new();
         for field in expanded_operation.fields {
             let alias = String::from(field.get_alias());
-            let (residual_field, cached_field) = match_field_with_cache(field, &cache);
+            let (residual_field, cached_field) = match_field_with_cache(field, &user_id, &cache);
 
             match residual_field {
                 Some(f) => residual_fields.push(f),
@@ -84,10 +85,9 @@ where
 
         let (response, doc) = get_fn(document).await;
         let result: GraphQLResponse = from_value(response?)?;
-
         let (mut response_data, hints) = result.compress_cache_hints();
 
-        update_cache(&cache, hints, &doc.operations[0]);
+        update_cache(&cache, &user_id, hints, &doc.operations[0]);
 
         merge_json(&mut response_data, data_from_cache);
 
@@ -99,18 +99,26 @@ where
 
 fn update_cache<'a>(
     cache: &cache::Cache<String, Value>,
+    user_id: &Option<String>,
     cache_hints: Vec<(Value, CacheHint)>,
     query: &Operation<'a>,
 ) {
-    for (value, hint) in cache_hints
-        .into_iter()
-        .filter(|h| h.1.scope == CacheScope::PUBLIC && h.1.path.len() > 0)
-    {
+    for (value, hint) in cache_hints.into_iter().filter(|h| h.1.path.len() > 0) {
         let (traversed_fields, cached_field) = query.traverse(&hint.path).unwrap();
         for (cache_key, cache_value) in get_cache_values(traversed_fields, cached_field, value) {
+            let cache_key = match (hint.scope, user_id) {
+                (CacheScope::PUBLIC, _) => cache_key,
+                (CacheScope::PRIVATE, Some(u)) => to_private_cache_key(u, cache_key),
+                (CacheScope::PRIVATE, None) => continue,
+            };
+
             cache.insert(cache_key, hint.max_age, cache_value);
         }
     }
+}
+
+fn to_private_cache_key(user_id: &String, cache_key: String) -> String {
+    format!("{} {}", user_id, cache_key)
 }
 
 fn get_cache_values<'a>(
@@ -119,6 +127,7 @@ fn get_cache_values<'a>(
     mut value: Value,
 ) -> Vec<(String, Value)> {
     let mut cacheable_fields = get_cacheable_fields(field, initial_path);
+
     // reverse collection so that fields closest to the root
     // are processed last
     cacheable_fields.sort_by(|path1, path2| path2.len().cmp(&path1.len()));
@@ -194,6 +203,7 @@ fn dealias_field(json_value: &mut Value, current_field: &Field) {
 
 fn match_field_with_cache<'a>(
     field: Field<'a>,
+    user_id: &Option<String>,
     cache: &cache::Cache<String, Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
     let cached_value = get_cached_item(&field_to_cache_key(&field), cache);
@@ -351,7 +361,7 @@ fn get_cacheable_fields<'a>(
     field: &'a Field<'a>,
     mut initial_path: Vec<&'a Field<'a>>,
 ) -> Vec<Vec<&'a Field<'a>>> {
-    let mut cachable_fields = vec![vec![field]];
+    let mut cachable_fields = Vec::new();
 
     extract_fields_with_parameters_recursive(field, &mut initial_path, &mut cachable_fields);
 
@@ -367,6 +377,10 @@ fn extract_fields_with_parameters_recursive<'a>(
 
     if field.has_parameters() {
         accumulator.push(stack.clone());
+    }
+
+    if accumulator.len() == 0 {
+        accumulator.push(vec!(stack[0]));
     }
 
     for subfield in field.get_subfields() {

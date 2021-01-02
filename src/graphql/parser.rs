@@ -627,7 +627,8 @@ impl<'a> Traversable<'a> for Operation<'a> {
         } else {
             self.fields
                 .iter()
-                .map(|f| f.traverse(path))
+                .filter(|f| path[0] == f.get_alias())
+                .map(|f| f.traverse(&path[1..]))
                 .filter(|o| o.is_some())
                 .nth(0)
                 .unwrap_or(None)
@@ -637,9 +638,7 @@ impl<'a> Traversable<'a> for Operation<'a> {
 
 impl<'a> Traversable<'a> for Field<'a> {
     fn traverse(&self, path: &[String]) -> Option<(Vec<&Field<'a>>, &Field<'a>)> {
-        if path.len() == 0 || path[0] != self.get_alias() {
-            None
-        } else if path.len() == 1 {
+        if path.len() == 0 {
             Some((vec![], self))
         } else {
             match self {
