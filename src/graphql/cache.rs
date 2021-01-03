@@ -350,7 +350,6 @@ fn get_cached_item<'a>(
     user_id: &Option<String>,
     cache: &cache::Cache<String, Value>,
 ) -> Option<Value> {
-    let mut cached_value = json!({});
     let public_cache = cache.get(&cache_key);
     let private_cache = match user_id {
         Some(uid) => cache.get(&to_private_cache_key(uid, cache_key)),
@@ -367,6 +366,7 @@ fn get_cached_item<'a>(
         (None, None) => return None,
     };
 
+    let mut cached_value = json!({});
     for x in cached_fields.into_iter() {
         merge_json(&mut cached_value, (*x).clone())
     }
