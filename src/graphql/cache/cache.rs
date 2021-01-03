@@ -105,7 +105,7 @@ impl<K: 'static + Hash + Eq + Send + Sync, T: 'static + Sync + Send> Cache<K, T>
                             (0, keys.len())
                         } else {
                             let count = 19 + keys.len() / 20;
-                            (rng.gen_range(0, keys.len() - count), count)
+                            (rng.gen_range(0..(keys.len() - count)), count)
                         };
 
                         let mut remove_indeces = Vec::<Arc<K>>::new();

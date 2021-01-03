@@ -104,20 +104,22 @@ fn update_cache<'a>(
     query: &Operation<'a>,
 ) {
     for (value, hint) in cache_hints.into_iter().filter(|h| h.1.path.len() > 0) {
-        let (traversed_fields, cached_field) = query.traverse(&hint.path).unwrap();
-        for (cache_key, cache_value) in get_cache_values(traversed_fields, cached_field, value) {
-            let cache_key = match (hint.scope, user_id) {
-                (CacheScope::PUBLIC, _) => cache_key,
-                (CacheScope::PRIVATE, Some(u)) => to_private_cache_key(u, cache_key),
-                (CacheScope::PRIVATE, None) => continue,
-            };
+        if let Some((traversed_fields, cached_field)) = query.traverse(&hint.path) {
+            for (cache_key, cache_value) in get_cache_values(traversed_fields, cached_field, value)
+            {
+                let cache_key = match (hint.scope, user_id) {
+                    (CacheScope::PUBLIC, _) => cache_key,
+                    (CacheScope::PRIVATE, Some(u)) => to_private_cache_key(u, &cache_key),
+                    (CacheScope::PRIVATE, None) => continue,
+                };
 
-            cache.insert(cache_key, hint.max_age, cache_value);
+                cache.insert(cache_key, hint.max_age, cache_value);
+            }
         }
     }
 }
 
-fn to_private_cache_key(user_id: &String, cache_key: String) -> String {
+fn to_private_cache_key(user_id: &String, cache_key: &String) -> String {
     format!("{} {}", user_id, cache_key)
 }
 
@@ -206,13 +208,14 @@ fn match_field_with_cache<'a>(
     user_id: &Option<String>,
     cache: &cache::Cache<String, Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
-    let cached_value = get_cached_item(&field_to_cache_key(&field), cache);
-    match_field_with_cache_recursive(&mut Vec::new(), field, cached_value, cache)
+    let cached_value = get_cached_item(&field_to_cache_key(&field), user_id, cache);
+    match_field_with_cache_recursive(&mut Vec::new(), field, user_id, cached_value, cache)
 }
 
 fn match_field_with_cache_recursive<'a>(
     stack: &mut Vec<String>,
     field: Field<'a>,
+    user_id: &Option<String>,
     cached_value: Option<Value>,
     cache: &cache::Cache<String, Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
@@ -260,12 +263,12 @@ fn match_field_with_cache_recursive<'a>(
         let subfield_name = subfield.get_name();
         let subfield_alias = String::from(subfield.get_alias());
 
-        // If a subfield have parameters, then get it from the cache
+        // If a subfield has parameters, then get it from the cache
         // else if a subfield is unique, then extract the cache value from the cache object
         // else clone the cache value (so it can be used by the next duplicate)
         let field_from_cache = if subfield.has_parameters() {
             let key = concatenate_cache_keys(stack, &subfield);
-            get_cached_item(&key, cache)
+            get_cached_item(&key, user_id, cache)
         } else {
             match subfield_map.get_mut(subfield.get_name()) {
                 Some(v) if v > &mut 1 => {
@@ -277,7 +280,7 @@ fn match_field_with_cache_recursive<'a>(
         };
 
         let (residual_subfield, from_cache) =
-            match_field_with_cache_recursive(stack, subfield, field_from_cache, cache);
+            match_field_with_cache_recursive(stack, subfield, user_id, field_from_cache, cache);
 
         match residual_subfield {
             Some(f) => residual_subfields.push(f),
@@ -342,19 +345,33 @@ fn fields_to_cache_key<'a>(fields: &[&Field<'a>]) -> String {
         .join("+")
 }
 
-fn get_cached_item<'a>(cache_key: &String, cache: &cache::Cache<String, Value>) -> Option<Value> {
+fn get_cached_item<'a>(
+    cache_key: &String,
+    user_id: &Option<String>,
+    cache: &cache::Cache<String, Value>,
+) -> Option<Value> {
     let mut cached_value = json!({});
-
-    match cache.get(&cache_key) {
-        Some(field_cache) => {
-            for x in field_cache.into_iter() {
-                merge_json(&mut cached_value, (*x).clone())
-            }
-
-            Some(cached_value)
-        }
+    let public_cache = cache.get(&cache_key);
+    let private_cache = match user_id {
+        Some(uid) => cache.get(&to_private_cache_key(uid, cache_key)),
         None => None,
+    };
+
+    let cached_fields = match (public_cache, private_cache) {
+        (Some(mut p), Some(r)) => {
+            p.extend_from_slice(&r);
+            p
+        }
+        (Some(p), None) => p,
+        (None, Some(r)) => r,
+        (None, None) => return None,
+    };
+
+    for x in cached_fields.into_iter() {
+        merge_json(&mut cached_value, (*x).clone())
     }
+
+    Some(cached_value)
 }
 
 fn get_cacheable_fields<'a>(
@@ -380,7 +397,7 @@ fn extract_fields_with_parameters_recursive<'a>(
     }
 
     if accumulator.len() == 0 {
-        accumulator.push(vec!(stack[0]));
+        accumulator.push(vec![stack[0]]);
     }
 
     for subfield in field.get_subfields() {

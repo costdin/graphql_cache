@@ -1,6 +1,5 @@
 mod graphql;
 mod graphql_deserializer;
-use hyper::{Client, Uri};
 
 use graphql_deserializer::CacheScope;
 use rand::Rng;
@@ -16,6 +15,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 use warp::Filter;
+use tokio::time::sleep;
 
 fn vv(v: D) {
     println!("{:#?}", v);
@@ -207,7 +207,7 @@ fn test_cache_cleanup() -> String {
         let mut rng = rand::thread_rng();
 
         for _ in 0..1000000 {
-            let i = rng.gen_range(0, 1000000);
+            let i = rng.gen_range(0..1000000);
             match c.get(&format!("xxxx{}", i)) {
                 Some(_) => {}
                 None => {}
@@ -587,12 +587,20 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     let query5 =
         "query {f1 { f2 ...fr }} fragment fr on User { fffff413: f4(id: 13) fffff411: f4(id: 11) }";
     let parsed_query = graphql::parser::parse_query(query1)?;
+    let parsed_query_clone = graphql::parser::parse_query(query1)?;
     let parsed_query2 = graphql::parser::parse_query(query2)?;
     let parsed_query3 = graphql::parser::parse_query(query3)?;
     let parsed_query4 = graphql::parser::parse_query(query4)?;
     let parsed_query5 = graphql::parser::parse_query(query5)?;
 
-    match graphql::cache::process_query(parsed_query, cache.clone(), None, send_request2).await {
+    match graphql::cache::process_query(
+        parsed_query,
+        cache.clone(),
+        Some(String::from("u1")),
+        send_request2,
+    )
+    .await
+    {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -604,7 +612,14 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::process_query(parsed_query2, cache.clone(), None, send_request2).await {
+    match graphql::cache::process_query(
+        parsed_query_clone,
+        cache.clone(),
+        Some(String::from("u2")),
+        send_request2,
+    )
+    .await
+    {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -616,7 +631,14 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::process_query(parsed_query3, cache.clone(), None, send_request2).await {
+    match graphql::cache::process_query(
+        parsed_query2,
+        cache.clone(),
+        Some(String::from("u1")),
+        send_request2,
+    )
+    .await
+    {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -628,7 +650,14 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::process_query(parsed_query4, cache.clone(), None, send_request2).await {
+    match graphql::cache::process_query(
+        parsed_query3,
+        cache.clone(),
+        Some(String::from("u1")),
+        send_request2,
+    )
+    .await
+    {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -640,7 +669,33 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::process_query(parsed_query5, cache, None, send_request2).await {
+    match graphql::cache::process_query(
+        parsed_query4,
+        cache.clone(),
+        Some(String::from("u1")),
+        send_request2,
+    )
+    .await
+    {
+        Ok(r) => println!("{:#?}", r),
+        Err(e) => println!("{:?}", e),
+    };
+
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+    println!("=================================================");
+
+    match graphql::cache::process_query(
+        parsed_query5,
+        cache,
+        Some(String::from("u1")),
+        send_request2,
+    )
+    .await
+    {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -662,7 +717,7 @@ async fn send_request<'a>(
     graphql::parser::Document<'a>,
 ) {
     println!("{:#?}", document);
-    tokio::time::delay_for(Duration::from_secs(4)).await;
+    sleep(Duration::from_secs(4)).await;
 
     let result = Ok(json!(
         {
@@ -722,6 +777,11 @@ async fn send_request2<'a>(
                         {
                             "path": ["f1", "f2"],
                             "maxAge": 1000
+                        },
+                        {
+                            "path": ["f1", "a2"],
+                            "maxAge": 1000,
+                            "scope": "PRIVATE"
                         }
                     ]
                 }
