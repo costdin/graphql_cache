@@ -102,3 +102,64 @@ fn skip_insignificant_characters<'a>(string: &'a str) -> &'a str {
         }
     }
 }
+
+#[test]
+fn tokenizer_processes_simple_query() {
+    let tokenizer = Tokenizer::new("{ f1 { f2 }}");
+    let tokens = tokenizer.collect::<Vec<_>>();
+
+    assert_eq!(6, tokens.len());
+    assert_eq!("{", tokens[0]);
+    assert_eq!("f1", tokens[1]);
+    assert_eq!("{", tokens[2]);
+    assert_eq!("f2", tokens[3]);
+    assert_eq!("}", tokens[4]);
+    assert_eq!("}", tokens[5]);
+}
+
+#[test]
+fn tokenizer_processes_parameters() {
+    let tokenizer = Tokenizer::new("{ f1(p1: 1,                          p2: \"parm2\") { f2 }}");
+    let tokens = tokenizer.collect::<Vec<_>>();
+
+    assert_eq!(14, tokens.len());
+    assert_eq!("{", tokens[0]);
+    assert_eq!("f1", tokens[1]);
+    assert_eq!("(", tokens[2]);
+    assert_eq!("p1", tokens[3]);
+    assert_eq!(":", tokens[4]);
+    assert_eq!("1", tokens[5]);
+    assert_eq!("p2", tokens[6]);
+    assert_eq!(":", tokens[7]);
+    assert_eq!("\"parm2\"", tokens[8]);
+    assert_eq!(")", tokens[9]);
+    assert_eq!("{", tokens[10]);
+    assert_eq!("f2", tokens[11]);
+    assert_eq!("}", tokens[12]);
+    assert_eq!("}", tokens[13]);
+}
+
+#[test]
+fn tokenizer_processes_fragments() {
+    let tokenizer =
+        Tokenizer::new("{ f1(p1: 1,                          p2: \"parm2\") { f2 ...frag }}");
+    let tokens = tokenizer.collect::<Vec<_>>();
+
+    assert_eq!(16, tokens.len());
+    assert_eq!("{", tokens[0]);
+    assert_eq!("f1", tokens[1]);
+    assert_eq!("(", tokens[2]);
+    assert_eq!("p1", tokens[3]);
+    assert_eq!(":", tokens[4]);
+    assert_eq!("1", tokens[5]);
+    assert_eq!("p2", tokens[6]);
+    assert_eq!(":", tokens[7]);
+    assert_eq!("\"parm2\"", tokens[8]);
+    assert_eq!(")", tokens[9]);
+    assert_eq!("{", tokens[10]);
+    assert_eq!("f2", tokens[11]);
+    assert_eq!("...", tokens[12]);
+    assert_eq!("frag", tokens[13]);
+    assert_eq!("}", tokens[14]);
+    assert_eq!("}", tokens[15]);
+}

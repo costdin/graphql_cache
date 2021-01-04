@@ -45,10 +45,10 @@ pub fn parse_query<'a>(query: &'a str) -> Result<Document<'a>, Error> {
             }
             Some("fragment") => fragment_definitions
                 .push(parse_fragment_definition(&mut tokens, &mut parser_state)?),
-            Some("{") if query_shorthand => {
+            curly_bracket @ Some("{") if query_shorthand => {
                 query_shorthand = true;
                 operations.push(parse_operation(
-                    Some("{"),
+                    curly_bracket,
                     query_shorthand,
                     OperationType::Query,
                     &mut tokens,
@@ -197,7 +197,7 @@ where
     I: Iterator<Item = &'a str>,
 {
     let (next_token, operation_name, variables) = match current_token {
-        Some("{") => (Some("{"), None, Vec::<Variable>::new()),
+        curly_bracket @ Some("{") => (curly_bracket, None, Vec::<Variable>::new()),
         Some(_) if query_shorthand => {
             return Err(Error {
                 error: String::from("Operation name is not allowed in shorthand mode"),
@@ -210,7 +210,7 @@ where
 
                 (tokens.next(), Some(name), variables)
             }
-            Some("{") => (Some("{"), Some(name), Vec::<Variable>::new()),
+            curly_bracket @ Some("{") => (curly_bracket, Some(name), Vec::<Variable>::new()),
             Some(s) => return Err(Error::new(format!("invalid token {}", s))),
             None => return Err(Error::new(String::from("Unexpected end of string"))),
         },
@@ -798,4 +798,190 @@ impl From<serde_json::error::Error> for Error {
             error: String::from("deserialization error"),
         }
     }
+}
+
+#[test]
+fn parser_can_parse_simple_query() {
+    let query = "{field}";
+    let parsed_query = parse_query(query).unwrap();
+
+    assert_eq!(1, parsed_query.operations.len());
+    assert_eq!(1, parsed_query.operations[0].fields.len());
+    assert_eq!("field", parsed_query.operations[0].fields[0].get_name());
+}
+
+#[test]
+fn parser_can_parse_simple_query_with_spaces() {
+    let query = "{ field }";
+    let parsed_query = parse_query(query).unwrap();
+
+    assert_eq!(1, parsed_query.operations.len());
+    assert_eq!(1, parsed_query.operations[0].fields.len());
+    assert_eq!("field", parsed_query.operations[0].fields[0].get_name());
+}
+
+#[test]
+fn parser_can_parse_simple_query_with_commas() {
+    let query = "{ field, field2, field3 }";
+    let parsed_query = parse_query(query).unwrap();
+
+    assert_eq!(1, parsed_query.operations.len());
+    assert_eq!(3, parsed_query.operations[0].fields.len());
+    assert_eq!("field", parsed_query.operations[0].fields[0].get_name());
+    assert_eq!("field2", parsed_query.operations[0].fields[1].get_name());
+    assert_eq!("field3", parsed_query.operations[0].fields[2].get_name());
+}
+
+#[test]
+fn parser_can_parse_simple_query_with_subfields() {
+    let query = "{ field {sub1 sub2}, field2 field3 {sub3, sub4} }";
+    let parsed_query = parse_query(query).unwrap();
+
+    assert_eq!(1, parsed_query.operations.len());
+    assert_eq!(3, parsed_query.operations[0].fields.len());
+    assert_eq!("field", parsed_query.operations[0].fields[0].get_name());
+    assert_eq!("field2", parsed_query.operations[0].fields[1].get_name());
+    assert_eq!("field3", parsed_query.operations[0].fields[2].get_name());
+
+    assert_eq!(
+        2,
+        parsed_query.operations[0].fields[0].get_subfields().len()
+    );
+    assert_eq!(
+        "sub1",
+        parsed_query.operations[0].fields[0].get_subfields()[0].get_name()
+    );
+    assert_eq!(
+        "sub2",
+        parsed_query.operations[0].fields[0].get_subfields()[1].get_name()
+    );
+
+    assert_eq!(
+        0,
+        parsed_query.operations[0].fields[1].get_subfields().len()
+    );
+
+    assert_eq!(
+        2,
+        parsed_query.operations[0].fields[2].get_subfields().len()
+    );
+    assert_eq!(
+        "sub3",
+        parsed_query.operations[0].fields[2].get_subfields()[0].get_name()
+    );
+    assert_eq!(
+        "sub4",
+        parsed_query.operations[0].fields[2].get_subfields()[1].get_name()
+    );
+}
+
+#[test]
+fn parser_can_parse_query_with_aliases() {
+    let query = "{alias1: field1{subalias1: sub1 sub2}, alias2: field1}";
+    let parsed_query = parse_query(query).unwrap();
+
+    assert_eq!(1, parsed_query.operations.len());
+    assert_eq!(2, parsed_query.operations[0].fields.len());
+    assert_eq!("field1", parsed_query.operations[0].fields[0].get_name());
+    assert_eq!("alias1", parsed_query.operations[0].fields[0].get_alias());
+    assert_eq!("field1", parsed_query.operations[0].fields[1].get_name());
+    assert_eq!("alias2", parsed_query.operations[0].fields[1].get_alias());
+
+    assert_eq!(
+        2,
+        parsed_query.operations[0].fields[0].get_subfields().len()
+    );
+    assert_eq!(
+        "sub1",
+        parsed_query.operations[0].fields[0].get_subfields()[0].get_name()
+    );
+    assert_eq!(
+        "subalias1",
+        parsed_query.operations[0].fields[0].get_subfields()[0].get_alias()
+    );
+    assert_eq!(
+        "sub2",
+        parsed_query.operations[0].fields[0].get_subfields()[1].get_name()
+    );
+
+    assert_eq!(
+        0,
+        parsed_query.operations[0].fields[1].get_subfields().len()
+    );
+}
+
+#[test]
+fn parser_can_parse_query_with_parameters() {
+    let query = "{alias1: field1(p1: 10){subalias1: sub1(p2: \"asd\") sub2}, alias2: field1}";
+    let parsed_query = parse_query(query).unwrap();
+
+    assert_eq!(1, parsed_query.operations.len());
+    assert_eq!(2, parsed_query.operations[0].fields.len());
+    assert_eq!("field1", parsed_query.operations[0].fields[0].get_name());
+    assert_eq!("alias1", parsed_query.operations[0].fields[0].get_alias());
+    assert_eq!(
+        1,
+        parsed_query.operations[0].fields[0].get_parameters().len()
+    );
+    assert_eq!(
+        "p1",
+        parsed_query.operations[0].fields[0].get_parameters()[0].name
+    );
+    matches!(parsed_query.operations[0].fields[0].get_parameters()[0].value, ParameterValue::Scalar(p1) if p1 == "10");
+
+    assert_eq!("field1", parsed_query.operations[0].fields[1].get_name());
+    assert_eq!("alias2", parsed_query.operations[0].fields[1].get_alias());
+
+    assert_eq!(
+        2,
+        parsed_query.operations[0].fields[0].get_subfields().len()
+    );
+    assert_eq!(
+        "sub1",
+        parsed_query.operations[0].fields[0].get_subfields()[0].get_name()
+    );
+    matches!(parsed_query.operations[0].fields[0].get_subfields()[0].get_parameters()[0].value, ParameterValue::Scalar(p1) if p1 == "\"asd\"");
+
+    assert_eq!(
+        "subalias1",
+        parsed_query.operations[0].fields[0].get_subfields()[0].get_alias()
+    );
+    assert_eq!(
+        "sub2",
+        parsed_query.operations[0].fields[0].get_subfields()[1].get_name()
+    );
+
+    assert_eq!(
+        0,
+        parsed_query.operations[0].fields[1].get_subfields().len()
+    );
+}
+
+#[test]
+fn parser_can_parse_query_with_fragments() {
+    let query = "query TheQuery { users{ ...userFragment surname friends {...userFragment surname } } } fragment userFragment on User { id name }";
+    let parsed_query = parse_query(query).unwrap();
+
+    println!("{:#?}", parsed_query);
+
+    assert_eq!(1, parsed_query.operations.len());
+    assert_eq!(1, parsed_query.fragment_definitions.len());
+
+    assert_eq!("users", parsed_query.operations[0].fields[0].get_name());
+    matches!(parsed_query.operations[0].fields[0].get_subfields()[0], Field::Fragment { name } if name == "userFragment");
+
+    assert_eq!(
+        "surname",
+        parsed_query.operations[0].fields[0].get_subfields()[1].get_name()
+    );
+    assert_eq!(
+        "friends",
+        parsed_query.operations[0].fields[0].get_subfields()[2].get_name()
+    );
+
+    matches!(parsed_query.operations[0].fields[0].get_subfields()[2].get_subfields()[0], Field::Fragment { name } if name == "userFragment");
+    assert_eq!(
+        "surname",
+        parsed_query.operations[0].fields[0].get_subfields()[2].get_subfields()[1].get_name()
+    );
 }
