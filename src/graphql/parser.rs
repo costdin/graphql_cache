@@ -985,3 +985,11 @@ fn parser_can_parse_query_with_fragments() {
         parsed_query.operations[0].fields[0].get_subfields()[2].get_subfields()[1].get_name()
     );
 }
+
+#[test]
+fn parser_preserves_spaces_in_string_parameters() {
+    let query = "{field1(p:\"as              d              \")}";
+    let parsed_query = parse_query(query).unwrap();
+
+    matches!(parsed_query.operations[0].fields[0].get_parameters()[0].value, ParameterValue::Scalar(p1) if p1 == "as              d              ");
+}
