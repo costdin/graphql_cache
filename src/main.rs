@@ -17,28 +17,8 @@ use std::time::{Duration, SystemTime};
 use tokio::time::sleep;
 use warp::Filter;
 
-fn vv(v: D) {
-    println!("{:#?}", v);
-}
-
-#[derive(Debug)]
-struct D {
-    ccc: String,
-}
-
-fn asd(i: &i8) {
-    if i > &3 {
-        println!("Ok");
-    } else {
-        println!("No");
-    }
-}
-
 #[tokio::main]
 async fn main() {
-    let i: i8 = 18;
-    asd(&i);
-
     let data = r#"
     {
         "data": 12
@@ -100,26 +80,6 @@ async fn main() {
         .and_then(move |a, b, c, d, auth_token| stuff(a, b, c, d, auth_token, cache.clone()));
 
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
-}
-
-pub struct the_struct<'a> {
-    internal_string: &'a str,
-}
-
-pub async fn function_doing_things<'a, Fut>(
-    the_struct: the_struct<'a>,
-    get_fn: impl Fn(the_struct<'a>) -> Fut,
-) -> i8
-where
-    Fut: Future<Output = (Value, the_struct<'a>)>,
-{
-    // do things to the_struct
-
-    let (some_result, one_struct) = get_fn(the_struct).await;
-
-    // use the_struct somehow
-
-    9
 }
 
 fn test_parser() -> String {

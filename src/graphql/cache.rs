@@ -410,13 +410,15 @@ fn extract_fields_with_parameters_recursive<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graphql::cache::create_cache;
     use crate::graphql::parser::*;
     use serde_json::json;
     use serde_json::value::Value;
+    use std::pin::Pin;
 
     #[tokio::test]
     async fn process_query_does_not_send_request_if_all_fields_are_cached() {
-        let cache = crate::graphql::cache::create_cache();
+        let cache = create_cache();
 
         let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
 
@@ -446,7 +448,7 @@ mod tests {
 
     #[tokio::test]
     async fn process_query_doesnt_send_request_if_all_fields_are_cached2() {
-        let cache = crate::graphql::cache::create_cache();
+        let cache = create_cache();
 
         let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
         let query2 = "{field1{subfield1}}";
@@ -454,11 +456,26 @@ mod tests {
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query2).unwrap();
 
+        let expected_result_1 = json!({"field1":{"subfield1":55,"subfield2":777,"aliased_subfield":123,"aliased_private_subfield":111}});
+        let cache_hints = vec![
+            (vec!["field1".to_string()], 2000i16, false),
+            (
+                vec!["field1".to_string(), "subfield1".to_string()],
+                1000,
+                false,
+            ),
+            (
+                vec!["field1".to_string(), "aliased_private_subfield".to_string()],
+                1000,
+                true,
+            ),
+        ];
+
         let result1 = process_query(
             parsed_query,
             cache.clone(),
             Some(String::from("u1")),
-            fake_send_request,
+            create_send_request(expected_result_1.clone(), cache_hints),
         )
         .await
         .unwrap();
@@ -475,16 +492,13 @@ mod tests {
         println!("{:#?}", result1);
         println!("{:#?}", result2);
 
-        assert_eq!(
-            result1,
-            json!({"data":{"field1":{"subfield1":55,"subfield2":777,"aliased_subfield":123,"aliased_private_subfield":111}}})
-        );
+        assert_eq!(result1, json!({ "data": expected_result_1 }));
         assert_eq!(result2, json!({"data":{"field1":{"subfield1":55}}}));
     }
 
     #[tokio::test]
     async fn process_query_doesnt_send_request_if_all_fields_are_cached_and_aliased() {
-        let cache = crate::graphql::cache::create_cache();
+        let cache = create_cache();
 
         let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
         let query2 = "{aliased_field1: field1{aliased_subfield1: subfield1}}";
@@ -522,7 +536,7 @@ mod tests {
 
     #[tokio::test]
     async fn process_query_does_not_get_value_from_private_caches_for_different_users() {
-        let cache = crate::graphql::cache::create_cache();
+        let cache = create_cache();
 
         let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
         let query2 = "{field1{subfield1, subfield3(id: 11)}}";
@@ -543,7 +557,7 @@ mod tests {
             parsed_query2,
             cache.clone(),
             Some(String::from("u2")),
-            fake_send_request_u2,
+            create_send_request(json!({"field1": {"subfield3":999}}), vec![]),
         )
         .await
         .unwrap();
@@ -558,10 +572,54 @@ mod tests {
         );
     }
 
+    fn create_send_request<'a>(
+        data: Value,
+        cache_hints: Vec<(Vec<String>, i16, bool)>,
+    ) -> Box<
+        dyn Fn(
+            Document<'a>,
+        ) -> Pin<Box<dyn Future<Output = (Result<Value, Error>, Document<'a>)> + '_>>,
+    > {
+        Box::new(move |d| Box::pin(fake_send_request_p(data.clone(), cache_hints.clone(), d)))
+    }
+
     async fn fake_not_called_send_request<'a>(
         _: Document<'a>,
     ) -> (Result<Value, Error>, Document<'a>) {
         panic!("This method should never be called")
+    }
+
+    async fn fake_send_request_p<'a>(
+        data: Value,
+        cache_hints: Vec<(Vec<String>, i16, bool)>,
+        document: Document<'a>,
+    ) -> (Result<Value, Error>, Document<'a>) {
+        println!("{:#?}", document);
+
+        let cache_hints = cache_hints
+            .iter()
+            .map(|(path, max_age, is_private)| {
+                if *is_private {
+                    json!({"path": path, "maxAge": max_age, "scope": "PRIVATE"})
+                } else {
+                    json!({"path": path, "maxAge": max_age})
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let result = Ok(json!(
+            {
+                "data": data,
+                "extensions": {
+                    "cacheControl": {
+                        "version": 1,
+                        "hints": cache_hints
+                    }
+                }
+            }
+        ));
+
+        (result, document)
     }
 
     async fn fake_send_request<'a>(document: Document<'a>) -> (Result<Value, Error>, Document<'a>) {
