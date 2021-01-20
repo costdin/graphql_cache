@@ -423,7 +423,7 @@ mod tests {
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query).unwrap();
 
-        let result1 = crate::graphql::cache::process_query(
+        let result1 = process_query(
             parsed_query,
             cache.clone(),
             Some(String::from("u1")),
@@ -432,7 +432,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result2 = crate::graphql::cache::process_query(
+        let result2 = process_query(
             parsed_query2,
             cache.clone(),
             Some(String::from("u1")),
@@ -454,7 +454,7 @@ mod tests {
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query2).unwrap();
 
-        let result1 = crate::graphql::cache::process_query(
+        let result1 = process_query(
             parsed_query,
             cache.clone(),
             Some(String::from("u1")),
@@ -463,7 +463,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result2 = crate::graphql::cache::process_query(
+        let result2 = process_query(
             parsed_query2,
             cache.clone(),
             Some(String::from("u1")),
@@ -492,7 +492,7 @@ mod tests {
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query2).unwrap();
 
-        let result1 = crate::graphql::cache::process_query(
+        let result1 = process_query(
             parsed_query,
             cache.clone(),
             Some(String::from("u1")),
@@ -501,7 +501,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result2 = crate::graphql::cache::process_query(
+        let result2 = process_query(
             parsed_query2,
             cache.clone(),
             Some(String::from("u1")),
@@ -530,7 +530,7 @@ mod tests {
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query2).unwrap();
 
-        let result1 = crate::graphql::cache::process_query(
+        let result1 = process_query(
             parsed_query,
             cache.clone(),
             Some(String::from("u1")),
@@ -539,7 +539,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result2 = crate::graphql::cache::process_query(
+        let result2 = process_query(
             parsed_query2,
             cache.clone(),
             Some(String::from("u2")),
