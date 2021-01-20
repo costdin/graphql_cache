@@ -407,123 +407,229 @@ fn extract_fields_with_parameters_recursive<'a>(
     stack.pop();
 }
 
-#[tokio::test]
-async fn process_query_doesnt_send_request_if_all_fields_are_cached() {
-    let cache = crate::graphql::cache::create_cache();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graphql::parser::*;
+    use serde_json::json;
+    use serde_json::value::Value;
 
-    let query = "{f1{f2 f3 a1: f4(id: 13) a2: f4(id: 11)}}";
+    #[tokio::test]
+    async fn process_query_does_not_send_request_if_all_fields_are_cached() {
+        let cache = crate::graphql::cache::create_cache();
 
-    let parsed_query = crate::graphql::parser::parse_query(query).unwrap();
-    let parsed_query2 = crate::graphql::parser::parse_query(query).unwrap();
+        let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
 
-    let result1 = crate::graphql::cache::process_query(
-        parsed_query,
-        cache.clone(),
-        Some(String::from("u1")),
-        fake_send_request,
-    )
-    .await
-    .unwrap();
+        let parsed_query = parse_query(query).unwrap();
+        let parsed_query2 = parse_query(query).unwrap();
 
-    let result2 = crate::graphql::cache::process_query(
-        parsed_query2,
-        cache.clone(),
-        Some(String::from("u1")),
-        fake_not_called_send_request,
-    )
-    .await
-    .unwrap();
+        let result1 = crate::graphql::cache::process_query(
+            parsed_query,
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_send_request,
+        )
+        .await
+        .unwrap();
 
-    assert_eq!(result1, result2);
-}
+        let result2 = crate::graphql::cache::process_query(
+            parsed_query2,
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_not_called_send_request,
+        )
+        .await
+        .unwrap();
 
-#[tokio::test]
-async fn process_query_doesnt_send_request_if_all_fields_are_cached2() {
-    let cache = crate::graphql::cache::create_cache();
+        assert_eq!(result1, result2);
+    }
 
-    let query = "{f1{f2 f3 a1: f4(id: 13) a2: f4(id: 11)}}";
-    let query2 = "{f1{f2}}";
+    #[tokio::test]
+    async fn process_query_doesnt_send_request_if_all_fields_are_cached2() {
+        let cache = crate::graphql::cache::create_cache();
 
-    let parsed_query = crate::graphql::parser::parse_query(query).unwrap();
-    let parsed_query2 = crate::graphql::parser::parse_query(query2).unwrap();
+        let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
+        let query2 = "{field1{subfield1}}";
 
-    let result1 = crate::graphql::cache::process_query(
-        parsed_query,
-        cache.clone(),
-        Some(String::from("u1")),
-        fake_send_request,
-    )
-    .await
-    .unwrap();
+        let parsed_query = parse_query(query).unwrap();
+        let parsed_query2 = parse_query(query2).unwrap();
 
-    let result2 = crate::graphql::cache::process_query(
-        parsed_query2,
-        cache.clone(),
-        Some(String::from("u1")),
-        fake_not_called_send_request,
-    )
-    .await
-    .unwrap();
+        let result1 = crate::graphql::cache::process_query(
+            parsed_query,
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_send_request,
+        )
+        .await
+        .unwrap();
 
-    println!("{:#?}", result1);
-    println!("{:#?}", result2);
+        let result2 = crate::graphql::cache::process_query(
+            parsed_query2,
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_not_called_send_request,
+        )
+        .await
+        .unwrap();
 
-    assert_eq!(
-        result1,
-        json!({"data":{"f1":{"f2":55,"f3":777,"a1":123,"a2":111}}})
-    );
-    assert_eq!(result2, json!({"data":{"f1":{"f2":55}}}));
-}
+        println!("{:#?}", result1);
+        println!("{:#?}", result2);
 
-async fn fake_not_called_send_request<'a>(
-    _: crate::graphql::parser::Document<'a>,
-) -> (
-    Result<Value, crate::graphql::parser::Error>,
-    crate::graphql::parser::Document<'a>,
-) {
-    panic!("This method should never be called")
-}
+        assert_eq!(
+            result1,
+            json!({"data":{"field1":{"subfield1":55,"subfield2":777,"aliased_subfield":123,"aliased_private_subfield":111}}})
+        );
+        assert_eq!(result2, json!({"data":{"field1":{"subfield1":55}}}));
+    }
 
-async fn fake_send_request<'a>(
-    document: crate::graphql::parser::Document<'a>,
-) -> (
-    Result<Value, crate::graphql::parser::Error>,
-    crate::graphql::parser::Document<'a>,
-) {
-    println!("{:#?}", document);
+    #[tokio::test]
+    async fn process_query_doesnt_send_request_if_all_fields_are_cached_and_aliased() {
+        let cache = crate::graphql::cache::create_cache();
 
-    let result = Ok(json!(
-        {
-            "data": {
-                "f1": {
-                    "f2": 55,
-                    "f3": 777,
-                    "a1": 123,
-                    "a2": 111
-                }
-            },
-            "extensions": {
-                "cacheControl": {
-                    "version": 1,
-                    "hints": [
-                        {
-                            "path": ["f1"],
-                            "maxAge": 2000
-                        },
-                        {
-                            "path": ["f1", "f2"],
-                            "maxAge": 1000
-                        },
-                        {
-                            "path": ["f1", "a2"],
-                            "maxAge": 1000,
-                            "scope": "PRIVATE"
-                        }
-                    ]
+        let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
+        let query2 = "{aliased_field1: field1{aliased_subfield1: subfield1}}";
+
+        let parsed_query = parse_query(query).unwrap();
+        let parsed_query2 = parse_query(query2).unwrap();
+
+        let result1 = crate::graphql::cache::process_query(
+            parsed_query,
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_send_request,
+        )
+        .await
+        .unwrap();
+
+        let result2 = crate::graphql::cache::process_query(
+            parsed_query2,
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_not_called_send_request,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result1,
+            json!({"data":{"field1":{"subfield1":55,"subfield2":777,"aliased_subfield":123,"aliased_private_subfield":111}}})
+        );
+        assert_eq!(
+            result2,
+            json!({"data":{"aliased_field1":{"aliased_subfield1":55}}})
+        );
+    }
+
+    #[tokio::test]
+    async fn process_query_does_not_get_value_from_private_caches_for_different_users() {
+        let cache = crate::graphql::cache::create_cache();
+
+        let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
+        let query2 = "{field1{subfield1, subfield3(id: 11)}}";
+
+        let parsed_query = parse_query(query).unwrap();
+        let parsed_query2 = parse_query(query2).unwrap();
+
+        let result1 = crate::graphql::cache::process_query(
+            parsed_query,
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_send_request,
+        )
+        .await
+        .unwrap();
+
+        let result2 = crate::graphql::cache::process_query(
+            parsed_query2,
+            cache.clone(),
+            Some(String::from("u2")),
+            fake_send_request_u2,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result1,
+            json!({"data":{"field1":{"subfield1":55,"subfield2":777,"aliased_subfield":123,"aliased_private_subfield":111}}})
+        );
+        assert_eq!(
+            result2,
+            json!({"data":{"field1":{"subfield1":55, "subfield3":999}}})
+        );
+    }
+
+    async fn fake_not_called_send_request<'a>(
+        _: Document<'a>,
+    ) -> (Result<Value, Error>, Document<'a>) {
+        panic!("This method should never be called")
+    }
+
+    async fn fake_send_request<'a>(document: Document<'a>) -> (Result<Value, Error>, Document<'a>) {
+        println!("{:#?}", document);
+
+        let result = Ok(json!(
+            {
+                "data": {
+                    "field1": {
+                        "subfield1": 55,
+                        "subfield2": 777,
+                        "aliased_subfield": 123,
+                        "aliased_private_subfield": 111
+                    }
+                },
+                "extensions": {
+                    "cacheControl": {
+                        "version": 1,
+                        "hints": [
+                            {
+                                "path": ["field1"],
+                                "maxAge": 2000
+                            },
+                            {
+                                "path": ["field1", "subfield1"],
+                                "maxAge": 1000
+                            },
+                            {
+                                "path": ["field1", "aliased_private_subfield"],
+                                "maxAge": 1000,
+                                "scope": "PRIVATE"
+                            }
+                        ]
+                    }
                 }
             }
-        }
-    ));
+        ));
 
-    (result, document)
+        (result, document)
+    }
+
+    async fn fake_send_request_u2<'a>(
+        document: Document<'a>,
+    ) -> (Result<Value, Error>, Document<'a>) {
+        println!("{:#?}", document);
+
+        let result = Ok(json!(
+            {
+                "data": {
+                    "field1": {
+                        "subfield3": 999
+                    }
+                },
+                "extensions": {
+                    "cacheControl": {
+                        "version": 1,
+                        "hints": [
+                            {
+                                "path": ["field1", "subfield3"],
+                                "maxAge": 1000,
+                                "scope": "PRIVATE"
+                            }
+                        ]
+                    }
+                }
+            }
+        ));
+
+        (result, document)
+    }
 }
