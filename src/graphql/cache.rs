@@ -406,3 +406,124 @@ fn extract_fields_with_parameters_recursive<'a>(
 
     stack.pop();
 }
+
+#[tokio::test]
+async fn process_query_doesnt_send_request_if_all_fields_are_cached() {
+    let cache = crate::graphql::cache::create_cache();
+
+    let query = "{f1{f2 f3 a1: f4(id: 13) a2: f4(id: 11)}}";
+
+    let parsed_query = crate::graphql::parser::parse_query(query).unwrap();
+    let parsed_query2 = crate::graphql::parser::parse_query(query).unwrap();
+
+    let result1 = crate::graphql::cache::process_query(
+        parsed_query,
+        cache.clone(),
+        Some(String::from("u1")),
+        fake_send_request,
+    )
+    .await
+    .unwrap();
+
+    let result2 = crate::graphql::cache::process_query(
+        parsed_query2,
+        cache.clone(),
+        Some(String::from("u1")),
+        fake_not_called_send_request,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result1, result2);
+}
+
+#[tokio::test]
+async fn process_query_doesnt_send_request_if_all_fields_are_cached2() {
+    let cache = crate::graphql::cache::create_cache();
+
+    let query = "{f1{f2 f3 a1: f4(id: 13) a2: f4(id: 11)}}";
+    let query2 = "{f1{f2}}";
+
+    let parsed_query = crate::graphql::parser::parse_query(query).unwrap();
+    let parsed_query2 = crate::graphql::parser::parse_query(query2).unwrap();
+
+    let result1 = crate::graphql::cache::process_query(
+        parsed_query,
+        cache.clone(),
+        Some(String::from("u1")),
+        fake_send_request,
+    )
+    .await
+    .unwrap();
+
+    let result2 = crate::graphql::cache::process_query(
+        parsed_query2,
+        cache.clone(),
+        Some(String::from("u1")),
+        fake_not_called_send_request,
+    )
+    .await
+    .unwrap();
+
+    println!("{:#?}", result1);
+    println!("{:#?}", result2);
+
+    assert_eq!(
+        result1,
+        json!({"data":{"f1":{"f2":55,"f3":777,"a1":123,"a2":111}}})
+    );
+    assert_eq!(result2, json!({"data":{"f1":{"f2":55}}}));
+}
+
+async fn fake_not_called_send_request<'a>(
+    _: crate::graphql::parser::Document<'a>,
+) -> (
+    Result<Value, crate::graphql::parser::Error>,
+    crate::graphql::parser::Document<'a>,
+) {
+    panic!("This method should never be called")
+}
+
+async fn fake_send_request<'a>(
+    document: crate::graphql::parser::Document<'a>,
+) -> (
+    Result<Value, crate::graphql::parser::Error>,
+    crate::graphql::parser::Document<'a>,
+) {
+    println!("{:#?}", document);
+
+    let result = Ok(json!(
+        {
+            "data": {
+                "f1": {
+                    "f2": 55,
+                    "f3": 777,
+                    "a1": 123,
+                    "a2": 111
+                }
+            },
+            "extensions": {
+                "cacheControl": {
+                    "version": 1,
+                    "hints": [
+                        {
+                            "path": ["f1"],
+                            "maxAge": 2000
+                        },
+                        {
+                            "path": ["f1", "f2"],
+                            "maxAge": 1000
+                        },
+                        {
+                            "path": ["f1", "a2"],
+                            "maxAge": 1000,
+                            "scope": "PRIVATE"
+                        }
+                    ]
+                }
+            }
+        }
+    ));
+
+    (result, document)
+}
