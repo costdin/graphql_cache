@@ -660,34 +660,4 @@ mod tests {
 
         (result, document)
     }
-
-    async fn fake_send_request_u2<'a>(
-        document: Document<'a>,
-    ) -> (Result<Value, Error>, Document<'a>) {
-        println!("{:#?}", document);
-
-        let result = Ok(json!(
-            {
-                "data": {
-                    "field1": {
-                        "subfield3": 999
-                    }
-                },
-                "extensions": {
-                    "cacheControl": {
-                        "version": 1,
-                        "hints": [
-                            {
-                                "path": ["field1", "subfield3"],
-                                "maxAge": 1000,
-                                "scope": "PRIVATE"
-                            }
-                        ]
-                    }
-                }
-            }
-        ));
-
-        (result, document)
-    }
 }
