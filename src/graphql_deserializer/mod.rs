@@ -7,20 +7,25 @@ use std::cmp::Ordering;
 #[derive(Deserialize, Debug)]
 pub struct GraphQLResponse {
     pub data: Value,
-    pub extensions: GraphQLExtensions,
+    pub extensions: Option<GraphQLExtensions>,
 }
 
 impl GraphQLResponse {
-    pub fn compress_cache_hints(mut self) -> (Value, Vec<(Value, CacheHint)>) {
-        if self.extensions.cache_control.hints.len() == 0 {
+    pub fn compress_cache_hints(self) -> (Value, Vec<(Value, CacheHint)>) {
+        let mut cache = match self.extensions {
+            Some(c) => c.cache_control,
+            None => return (self.data, Vec::new()),
+        };
+
+        if cache.hints.len() == 0 {
             return (self.data, vec![]);
         }
 
-        self.extensions.cache_control.hints.sort_by(order_hints);
+        cache.hints.sort_by(order_hints);
 
         let mut compressed_hints = Vec::<(Value, CacheHint)>::new();
         let mut stack = Vec::<(Value, CacheHint)>::new();
-        for hint in self.extensions.cache_control.hints {
+        for hint in cache.hints {
             let (last_scope, last_max_age, traversed_hierarchy) =
                 get_hints_from_stack(&hint, &mut stack);
 

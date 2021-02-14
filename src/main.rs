@@ -1,16 +1,14 @@
 mod graphql;
 mod graphql_deserializer;
 
+use graphql::parser::{parse_query, serialize_document};
 use graphql_deserializer::CacheScope;
 use rand::Rng;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::fmt::Debug;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::str;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -19,19 +17,7 @@ use warp::Filter;
 
 #[tokio::main]
 async fn main() {
-    let data = r#"
-    {
-        "data": 12
-    }"#;
-
-    //let c: Value = serde_json::from_str(data).unwrap();
-    //let c = D {
-    //    ccc: "ADSSDSAD".to_string(),
-    //};
-    //let mut v = Vec::<D>::new();
-    //vv(c);
-    //v.push(c);
-
+    /*
     match test_parser() {
         s if s == "Ok" => println!("parser test passed"),
         s => println!("parser test failed: {}", s),
@@ -66,18 +52,20 @@ async fn main() {
         s if s == "Ok" => println!("cache test passed"),
         s => println!("cache test failed: {}", s),
     };
+    */
 
     let cache = graphql::cache::create_cache();
 
-    let authToken = warp::cookie::optional("auth_token");
+//    let auth_token = warp::cookie::optional("auth_token");
+    let auth_token = warp::header::optional("x-auth");
 
     let routes = warp::path("hello")
-        .and(warp::path::param())
-        .and(warp::header("user-agent"))
+        //.and(warp::path::param())
+        //.and(warp::header("user-agent"))
         .and(warp::addr::remote())
         .and(warp::body::json())
-        .and(authToken)
-        .and_then(move |a, b, c, d, auth_token| stuff(a, b, c, d, auth_token, cache.clone()));
+        .and(auth_token)
+        .and_then(move |c, d, auth_token| stuff(c, d, auth_token, cache.clone()));
 
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 }
@@ -670,13 +658,58 @@ fn parse<'a, T, NomParser>(input: &'a str, parser: NomParser) -> ParseResult<'a,
 
 */
 
+async fn forward_graphql_request<'a>(
+    document: graphql::parser::Document<'a>,
+) -> (
+    Result<Value, graphql::parser::Error>,
+    graphql::parser::Document<'a>,
+) {
+    let sss = serialize_document(&document);
+    println!("Request: {}", sss);
+    let mut map = HashMap::new();
+    map.insert("query", sss);
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post("http://192.168.1.50:4000/")
+        .json(&map)
+        .send()
+        .await;
+
+    let resp = match res {
+        Ok(r) => r.json::<Value>().await,
+        Err(e) => {
+            return (
+                Err(graphql::parser::Error::new(format!(
+                    "Request error: {:?}",
+                    e
+                ))),
+                document,
+            )
+        }
+    };
+
+    //println!("Response: {:#?}", resp);
+
+    match resp {
+        Ok(r) => (Ok(r), document),
+        Err(e) => (
+            Err(graphql::parser::Error::new(format!(
+                "Deserialization error: {:?}",
+                e
+            ))),
+            document,
+        ),
+    }
+}
+
 async fn send_request<'a>(
     document: graphql::parser::Document<'a>,
 ) -> (
     Result<Value, graphql::parser::Error>,
     graphql::parser::Document<'a>,
 ) {
-    println!("{:#?}", document);
+    println!("{:#?}", serialize_document(&document));
     sleep(Duration::from_secs(4)).await;
 
     let result = Ok(json!(
@@ -763,13 +796,18 @@ fn t1(s: &String) -> String {
 }
 
 async fn stuff(
-    param: String,
-    agent: String,
+    //param: String,
+    //agent: String,
     addr_opt: Option<SocketAddr>,
     body: HashMap<String, String>,
     auth_token: Option<String>,
     cache: Arc<graphql::cache::cache::Cache<String, Value>>,
 ) -> Result<impl warp::Reply, Infallible> {
+    match auth_token {
+        Some(token) => println!("Request from {}", token),
+        None => println!("Request from anonymous")
+    };
+
     let query = match body.get("query") {
         Some(q) => match graphql::parser::parse_query(&q) {
             Ok(r) => r,
@@ -778,10 +816,11 @@ async fn stuff(
         None => return Ok(format!("no")),
     };
 
-    let result = match graphql::cache::process_query(query, cache, None, send_request).await {
-        Ok(r) => format!("{}", r.to_string()),
-        Err(e) => format!("{:?}", e),
-    };
+    let result =
+        match graphql::cache::process_query(query, cache, None, forward_graphql_request).await {
+            Ok(r) => format!("{}", r.to_string()),
+            Err(e) => format!("{:?}", e),
+        };
 
     /*
        let result = match addr_opt {

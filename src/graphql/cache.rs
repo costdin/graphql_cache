@@ -1,7 +1,8 @@
 pub mod cache;
 use crate::graphql::json::{extract_mut, merge_json};
 use crate::graphql::parser::{
-    expand_operation, Document, Error, Field, Operation, OperationType, Traversable,
+    expand_operation, Document, Error, Field, Operation, OperationType, Parameter, ParameterValue,
+    Traversable,
 };
 use crate::graphql_deserializer::{CacheHint, CacheScope, GraphQLResponse};
 use serde_json::map::Map;
@@ -238,13 +239,14 @@ fn match_field_with_cache_recursive<'a>(
 
     stack.push(field_to_cache_key(&field));
 
-    let (alias, name, subfields) = match field {
+    let (alias, name, subfields, parameters) = match field {
         Field::Field {
             alias,
             name,
             fields,
+            parameters,
             ..
-        } => (alias, name, fields),
+        } => (alias, name, fields, parameters),
         _ => return (Some(field), None),
     };
 
@@ -301,7 +303,7 @@ fn match_field_with_cache_recursive<'a>(
         Some(Field::new_field(
             alias,
             name,
-            Vec::new(),
+            parameters,
             residual_subfields,
         ))
     } else {
@@ -318,23 +320,32 @@ fn match_field_with_cache_recursive<'a>(
 }
 
 fn field_to_cache_key<'a>(field: &Field<'a>) -> String {
-    if field.get_parameters().len() == 0 {
-        field.get_name().to_string()
+    let result = field.get_name().to_string();
+    let parameters = field.get_parameters();
+
+    if parameters.len() == 0 {
+        result
     } else {
-        field.get_name().to_string()
-            + "_"
-            + field
-                .get_parameters()
-                .iter()
-                .map(|p| format!("{:?}", p))
-                .collect::<Vec<_>>()
-                .join("-")
-                .as_str()
+        parameters
+            .iter()
+            .fold(result, |acc, p| append_parameter_to_cache_key(acc, p))
+    }
+}
+
+fn append_parameter_to_cache_key<'a>(cache_key: String, parameter: &Parameter<'a>) -> String {
+    let result = cache_key + "_" + parameter.name;
+
+    match &parameter.value {
+        ParameterValue::Nil => result + "NIL",
+        ParameterValue::Scalar(s) => result + s,
+        ParameterValue::Variable(v) => result + v,
+        ParameterValue::Object(obj) => result + &format!("OBJ{:?}", obj),
+        ParameterValue::List(lst) => result + &format!("LST{:?}", lst),
     }
 }
 
 fn concatenate_cache_keys<'a>(cache_keys: &[String], field: &Field<'a>) -> String {
-    cache_keys.join("+") + "+" + &field_to_cache_key(field).as_str()
+    cache_keys.join("+") + "+" + &field_to_cache_key(field)
 }
 
 fn fields_to_cache_key<'a>(fields: &[&Field<'a>]) -> String {
@@ -489,9 +500,6 @@ mod tests {
         .await
         .unwrap();
 
-        println!("{:#?}", result1);
-        println!("{:#?}", result2);
-
         assert_eq!(result1, json!({ "data": expected_result_1 }));
         assert_eq!(result2, json!({"data":{"field1":{"subfield1":55}}}));
     }
@@ -594,8 +602,6 @@ mod tests {
         cache_hints: Vec<(Vec<String>, i16, bool)>,
         document: Document<'a>,
     ) -> (Result<Value, Error>, Document<'a>) {
-        println!("{:#?}", document);
-
         let cache_hints = cache_hints
             .iter()
             .map(|(path, max_age, is_private)| {
@@ -623,8 +629,6 @@ mod tests {
     }
 
     async fn fake_send_request<'a>(document: Document<'a>) -> (Result<Value, Error>, Document<'a>) {
-        println!("{:#?}", document);
-
         let result = Ok(json!(
             {
                 "data": {

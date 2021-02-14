@@ -78,6 +78,130 @@ pub fn parse_query<'a>(query: &'a str) -> Result<Document<'a>, Error> {
     }
 }
 
+pub fn serialize_document<'a>(document: &Document<'a>) -> String {
+    let op = document.operations.iter().nth(0).unwrap();
+
+    let op_type = match op.operation_type {
+        OperationType::Query
+            if document.operations.len() == 1 && document.fragment_definitions.len() == 0 =>
+        {
+            String::new()
+        }
+        OperationType::Query => String::from("query"),
+        OperationType::Mutation => String::from("mutation"),
+        OperationType::Subscription => String::from("subscription"),
+    };
+
+    let fields = op.fields.iter().map(|f| serialize_field(f)).fold(
+        String::from(""),
+        |acc, f| if acc == "" { acc } else { acc + " " } + &f,
+    );
+
+    let fragments = if document.fragment_definitions.len() > 0 {
+        document
+            .fragment_definitions
+            .iter()
+            .map(|f| serialize_fragment(f))
+            .fold(
+                String::from(""),
+                |acc, f| if acc == "" { acc } else { acc + " " } + &f,
+            )
+    } else {
+        String::new()
+    };
+
+    op_type + "{" + &fields + "}" + &fragments
+}
+
+fn serialize_fragment<'a>(fragment: &FragmentDefinition<'a>) -> String {
+    String::from("fragment ")
+        + fragment.name
+        + " on "
+        + fragment.r#type
+        + "{"
+        + &fragment.fields.iter().map(|f| serialize_field(f)).fold(
+            String::from(""),
+            |acc, f| if acc == "" { acc } else { acc + " " } + &f,
+        )
+        + "}"
+}
+
+// TODO: Optimize this function to reduce allocations
+//       caused by string concatenations
+fn serialize_field<'a>(field: &Field<'a>) -> String {
+    match field {
+        Field::Field {
+            alias,
+            name,
+            parameters,
+            fields,
+        } => {
+            let mut result = if let Some(a) = alias {
+                String::from(*a) + ":" + name
+            } else {
+                String::from(*name)
+            };
+
+            if parameters.len() > 0 {
+                result += "(";
+                result += &parameters.iter().fold(
+                    String::new(),
+                    |acc, p| if acc == "" { acc } else { acc + " " } + &serialize_parameter(p),
+                );
+                result += ")";
+            }
+
+            if fields.len() > 0 {
+                result += "{";
+                result += &fields.iter().fold(
+                    String::new(),
+                    |acc: String, f| if acc == "" { acc } else { acc + " " } + &serialize_field(f),
+                );
+                result += "}";
+            }
+
+            result
+        }
+        Field::Fragment { name } => String::from("...") + name,
+    }
+}
+
+fn serialize_parameter<'a>(parameter: &Parameter<'a>) -> String {
+    String::from(parameter.name) + ":" + serialize_parameter_value(&parameter.value).as_str()
+}
+
+fn serialize_parameter_value<'a>(value: &ParameterValue<'a>) -> String {
+    match value {
+        ParameterValue::Scalar(s) => String::from(*s),
+        ParameterValue::Variable(v) => format!("${}", v),
+        ParameterValue::Nil => String::from("null"),
+        ParameterValue::Object(o) => {
+            let mut result = String::from("{");
+            result += &o.iter().fold(String::new(), |acc, v| {
+                acc + " " + serialize_parameter_field(v).as_str()
+            });
+            result += "}";
+
+            result
+        }
+        ParameterValue::List(l) => {
+            let mut result = String::from("[");
+            result += &l.iter().fold(String::new(), |acc, v| {
+                acc + " " + serialize_parameter_value(v).as_str()
+            });
+            result += "]";
+
+            result
+        }
+    }
+}
+
+fn serialize_parameter_field<'a>(parameter_field: &ParameterField<'a>) -> String {
+    String::from(parameter_field.name)
+        + ":"
+        + serialize_parameter_value(&parameter_field.value).as_str()
+}
+
 pub fn expand_operation<'a>(
     operation: Operation<'a>,
     fragment_definitions: &Vec<FragmentDefinition<'a>>,
@@ -755,8 +879,8 @@ static EMPTY_FIELD_LIST: &'static [Field] = &[];
 
 #[derive(Debug, Clone)]
 pub struct Parameter<'a> {
-    name: &'a str,
-    value: ParameterValue<'a>,
+    pub name: &'a str,
+    pub value: ParameterValue<'a>,
 }
 
 #[derive(Debug, Clone)]
@@ -966,8 +1090,6 @@ mod tests {
         let query = "query TheQuery { users{ ...userFragment surname friends {...userFragment surname } } } fragment userFragment on User { id name }";
         let parsed_query = parse_query(query).unwrap();
 
-        println!("{:#?}", parsed_query);
-
         assert_eq!(1, parsed_query.operations.len());
         assert_eq!(1, parsed_query.fragment_definitions.len());
 
@@ -996,5 +1118,68 @@ mod tests {
         let parsed_query = parse_query(query).unwrap();
 
         matches!(parsed_query.operations[0].fields[0].get_parameters()[0].value, ParameterValue::Scalar(p1) if p1 == "as              d              ");
+    }
+
+    #[test]
+    fn parsed_string_can_be_serialized() {
+        let query = "{field1}";
+        let parsed_query = parse_query(query).unwrap();
+        let serialized_query = serialize_document(&parsed_query);
+
+        assert_eq!(query, serialized_query);
+    }
+
+    #[test]
+    fn parsed_string_with_two_fields_can_be_serialized() {
+        let query = "{field1 field2}";
+        let parsed_query = parse_query(query).unwrap();
+        let serialized_query = serialize_document(&parsed_query);
+
+        assert_eq!(query, serialized_query);
+    }
+
+    #[test]
+    fn parsed_string_with_subfields_can_be_serialized() {
+        let query = "{field1{subfield1 subfield2} field2}";
+        let parsed_query = parse_query(query).unwrap();
+        let serialized_query = serialize_document(&parsed_query);
+
+        assert_eq!(query, serialized_query);
+    }
+
+    #[test]
+    fn parsed_string_with_subfields_and_parameters_can_be_serialized() {
+        let query = "{field1(p1:1){subfield1(p2:2) subfield2} field2}";
+        let parsed_query = parse_query(query).unwrap();
+        let serialized_query = serialize_document(&parsed_query);
+
+        assert_eq!(query, serialized_query);
+    }
+
+    #[test]
+    fn parsed_mutation_can_be_serialized() {
+        let query = "mutation{addUser(id:\"123\" name:\"the name\")}";
+        let parsed_query = parse_query(query).unwrap();
+        let serialized_query = serialize_document(&parsed_query);
+
+        assert_eq!(query, serialized_query);
+    }
+
+    #[test]
+    fn parsed_query_with_fragment_can_be_serialized() {
+        let query = "query{getUser(id:\"123\"){...frag}}fragment frag on user{id name}";
+        let parsed_query = parse_query(query).unwrap();
+        let serialized_query = serialize_document(&parsed_query);
+
+        assert_eq!(query, serialized_query);
+    }
+
+    #[test]
+    fn parsed_query_with_parameter_can_be_serialized() {
+        let query = "{launch(id:109){id site mission{name}}}";
+        let parsed_query = parse_query(query).unwrap();
+        let serialized_query = serialize_document(&parsed_query);
+
+        assert_eq!(query, serialized_query);
     }
 }
