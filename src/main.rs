@@ -11,7 +11,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Instant, Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::time::sleep;
 use warp::Filter;
 
@@ -67,7 +67,7 @@ async fn main() {
         s => println!("cache test failed: {}", s),
     };
     */
-
+    
     let cache = graphql::cache::create_cache();
 
     //    let auth_token = warp::cookie::optional("auth_token");
@@ -838,11 +838,17 @@ async fn stuff(
         None => return Ok(format!("no")),
     };
 
-    let result =
-        match graphql::cache::process_query(query, cache, auth_token, forward_graphql_request).await {
-            Ok(r) => format!("{}", r.to_string()),
-            Err(e) => format!("{:?}", e),
-        };
+    let result = match graphql::cache::process_query(
+        query,
+        cache,
+        auth_token,
+        forward_graphql_request,
+    )
+    .await
+    {
+        Ok(r) => format!("{}", r.to_string()),
+        Err(e) => format!("{:?}", e),
+    };
 
     /*
        let result = match addr_opt {

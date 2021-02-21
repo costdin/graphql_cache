@@ -121,7 +121,7 @@ fn update_cache<'a>(
 }
 
 fn to_private_cache_key(user_id: &str, cache_key: &str) -> String {
-    [ user_id, cache_key ].join("")
+    [user_id, cache_key].join("")
 }
 
 fn get_cache_values<'a>(
@@ -137,12 +137,13 @@ fn get_cache_values<'a>(
 
     cacheable_fields
         .into_iter()
-        .map(|fields|
+        .map(|fields| {
             (
                 fields_to_cache_key(&fields),
                 extract_mut(&mut value, &fields_to_json_path(&fields)),
                 fields,
-            ))
+            )
+        })
         .filter(|(_, v, _)| v.is_some())
         .map(|(cache_key, v, path)| (cache_key, dealias_fields(v.unwrap(), &path)))
         .collect::<Vec<_>>()
@@ -593,11 +594,26 @@ mod tests {
             parsed_query,
             cache.clone(),
             Some(String::from("u1")),
-            create_send_request(json!({"field1": {"subfield1":{ "subsubfield1": 123, "subsubfield2": 234 }}}), vec![
-                ( vec![ String::from("field1") ], 0, false ),
-                ( vec![ String::from("field1"), String::from("subfield1") ], 1000, false ),
-                ( vec![ String::from("field1"), String::from("subfield1"), String::from("subsubfield1") ], 200, true )
-               ])
+            create_send_request(
+                json!({"field1": {"subfield1":{ "subsubfield1": 123, "subsubfield2": 234 }}}),
+                vec![
+                    (vec![String::from("field1")], 0, false),
+                    (
+                        vec![String::from("field1"), String::from("subfield1")],
+                        1000,
+                        false,
+                    ),
+                    (
+                        vec![
+                            String::from("field1"),
+                            String::from("subfield1"),
+                            String::from("subsubfield1"),
+                        ],
+                        200,
+                        true,
+                    ),
+                ],
+            ),
         )
         .await
         .unwrap();
@@ -606,7 +622,7 @@ mod tests {
             parsed_query2,
             cache.clone(),
             Some(String::from("u1")),
-            fake_not_called_send_request
+            fake_not_called_send_request,
         )
         .await
         .unwrap();
