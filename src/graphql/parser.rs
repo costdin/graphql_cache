@@ -78,57 +78,78 @@ pub fn parse_query<'a>(query: &'a str) -> Result<Document<'a>, Error> {
     }
 }
 
+// TODO  - Fix these repetitions:
+//    let mut first = true;
+//    for field in op.fields.iter() {
+//        if first {
+//            first = false;
+//        } else {
+//            serialized_document.push(' ')
+//        }
+//        serialize_field(field, &mut serialized_document);
+//    }
 pub fn serialize_document<'a>(document: &Document<'a>) -> String {
     let op = document.operations.iter().nth(0).unwrap();
 
-    let op_type = match op.operation_type {
+    let mut serialized_document = String::with_capacity(500) +
+    match op.operation_type {
         OperationType::Query
             if document.operations.len() == 1 && document.fragment_definitions.len() == 0 =>
         {
-            String::new()
+            "{"
         }
-        OperationType::Query => String::from("query"),
-        OperationType::Mutation => String::from("mutation"),
-        OperationType::Subscription => String::from("subscription"),
+        OperationType::Query => "query{",
+        OperationType::Mutation => "mutation{",
+        OperationType::Subscription => "subscription{",
     };
 
-    let fields = op.fields.iter().map(|f| serialize_field(f)).fold(
-        String::from(""),
-        |acc, f| if acc == "" { acc } else { acc + " " } + &f,
-    );
+    let mut first = true;
+    for field in op.fields.iter() {
+        if first {
+            first = false;
+        } else {
+            serialized_document.push(' ')
+        }
+        serialize_field(field, &mut serialized_document);
+    }
+    serialized_document.push('}');
 
-    let fragments = if document.fragment_definitions.len() > 0 {
-        document
-            .fragment_definitions
-            .iter()
-            .map(|f| serialize_fragment(f))
-            .fold(
-                String::from(""),
-                |acc, f| if acc == "" { acc } else { acc + " " } + &f,
-            )
-    } else {
-        String::new()
-    };
+    let mut ffffiiirst = true;
+    for frag in document.fragment_definitions.iter() {
+        if ffffiiirst {
+            ffffiiirst = false
+        } else {
+            serialized_document.push(' ');
+        }
 
-    op_type + "{" + &fields + "}" + &fragments
+        serialize_fragment(frag, &mut serialized_document);
+    }
+
+    serialized_document
 }
 
-fn serialize_fragment<'a>(fragment: &FragmentDefinition<'a>) -> String {
-    String::from("fragment ")
-        + fragment.name
-        + " on "
-        + fragment.r#type
-        + "{"
-        + &fragment.fields.iter().map(|f| serialize_field(f)).fold(
-            String::from(""),
-            |acc, f| if acc == "" { acc } else { acc + " " } + &f,
-        )
-        + "}"
+fn serialize_fragment<'a>(fragment: &FragmentDefinition<'a>, s1: &mut String) {
+    s1.push_str("fragment ");
+    s1.push_str(fragment.name);
+    s1.push_str(" on ");
+    s1.push_str(fragment.r#type);
+    s1.push('{');
+
+    let mut first = true;
+    for field in fragment.fields.iter() {
+        if first {
+            first = false;
+        } else {
+            s1.push(' ');
+        }
+
+        serialize_field(field, s1);
+    }
+
+    s1.push('}');
 }
 
-// TODO: Optimize this function to reduce allocations
-//       caused by string concatenations
-fn serialize_field<'a>(field: &Field<'a>) -> String {
+fn serialize_field<'a>(field: &Field<'a>, s1: &mut String) {
     match field {
         Field::Field {
             alias,
@@ -136,33 +157,49 @@ fn serialize_field<'a>(field: &Field<'a>) -> String {
             parameters,
             fields,
         } => {
-            let mut result = if let Some(a) = alias {
-                String::from(*a) + ":" + name
+            if let Some(a) = alias {
+                s1.push_str(a);
+                s1.push_str(":");
+                s1.push_str(name);
             } else {
-                String::from(*name)
+                s1.push_str(*name)
             };
 
             if parameters.len() > 0 {
-                result += "(";
-                result += &parameters.iter().fold(
-                    String::new(),
-                    |acc, p| if acc == "" { acc } else { acc + " " } + &serialize_parameter(p),
-                );
-                result += ")";
+                s1.push('(');
+                
+                let mut first = true;
+                for parm in parameters.iter() {
+                    if first {
+                        first = false;
+                    } else {
+                        s1.push(' ');
+                    }
+                    s1.push_str(&serialize_parameter(parm));
+                }
+                s1.push(')');
             }
 
             if fields.len() > 0 {
-                result += "{";
-                result += &fields.iter().fold(
-                    String::new(),
-                    |acc: String, f| if acc == "" { acc } else { acc + " " } + &serialize_field(f),
-                );
-                result += "}";
-            }
+                s1.push('{');
 
-            result
+                let mut first = true;
+                for field in fields.iter() {
+                    if first {
+                        first = false;
+                    } else {
+                        s1.push(' ');
+                    }
+
+                    serialize_field(field, s1);
+                }
+                s1.push('}');
+            }
         }
-        Field::Fragment { name } => String::from("...") + name,
+        Field::Fragment { name } => {
+            s1.push_str("...");
+            s1.push_str(name);
+        }
     }
 }
 
@@ -771,7 +808,7 @@ impl<'a> Traversable<'a> for Field<'a> {
                 } => match subfields.iter().filter(|s| path[0] == s.get_alias()).nth(0) {
                     Some(f) => match f.traverse(&path[1..]) {
                         Some((mut traversed, field)) => {
-                            traversed.push(self);
+                            traversed.insert(0, self);
                             Some((traversed, field))
                         }
                         None => None,

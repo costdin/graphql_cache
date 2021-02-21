@@ -11,18 +11,32 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Instant, Duration, SystemTime};
 use tokio::time::sleep;
 use warp::Filter;
 
 #[tokio::main]
 async fn main() {
-    /*
+    /*let now = Instant::now();
+    for _ in 0..10000 {
+        let stri = "                          {    field1  (p1 :                         1,         p2:\"as        \\\"      d              \"    )     {      subf1      subf2(  p3   :0)   { s     } }}      ";
+        let rezult = graphql::parser::parse_query(stri).unwrap();
+        let xxxx = graphql::parser::serialize_document(&rezult);
+
+        match xxxx.len() {
+            0 => {},
+            _ => {}
+        }
+    }
+    println!("{}", now.elapsed().as_micros());
+    return;
+
     match test_parser() {
         s if s == "Ok" => println!("parser test passed"),
         s => println!("parser test failed: {}", s),
-    };
+    };*/
 
+    /*
     match test_cache_update().await {
         Ok(()) => println!("cache update test passed"),
         Err(s) => println!("cache update test failed"),
@@ -56,10 +70,10 @@ async fn main() {
 
     let cache = graphql::cache::create_cache();
 
-//    let auth_token = warp::cookie::optional("auth_token");
+    //    let auth_token = warp::cookie::optional("auth_token");
     let auth_token = warp::header::optional("x-auth");
 
-    let routes = warp::path("hello")
+    let endpoint = warp::path("hello")
         //.and(warp::path::param())
         //.and(warp::header("user-agent"))
         .and(warp::addr::remote())
@@ -67,10 +81,18 @@ async fn main() {
         .and(auth_token)
         .and_then(move |c, d, auth_token| stuff(c, d, auth_token, cache.clone()));
 
+    let routes = endpoint;
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 }
 
 fn test_parser() -> String {
+    let xxxx = "{ f1(p1: 1,                          p2: \"parm2\") { f2 }}";
+    let resultxxxx = graphql::parser::parse_query(xxxx);
+    match resultxxxx {
+        Ok(_ast) => {}
+        Err(e) => return format!("{:?}", e),
+    }
+
     let stri = "                          {    field1  (p1 :                         1,         p2:\"as        \\\"      d              \"    )     {      subf1      subf2(  p3   :0)   { s     } }}      ";
     let rezult = graphql::parser::parse_query(stri);
     match rezult {
@@ -803,10 +825,10 @@ async fn stuff(
     auth_token: Option<String>,
     cache: Arc<graphql::cache::cache::Cache<String, Value>>,
 ) -> Result<impl warp::Reply, Infallible> {
-    match auth_token {
-        Some(token) => println!("Request from {}", token),
-        None => println!("Request from anonymous")
-    };
+    //match auth_token {
+    //    Some(token) => println!("Request from {}", token),
+    //    None => println!("Request from anonymous"),
+    //};
 
     let query = match body.get("query") {
         Some(q) => match graphql::parser::parse_query(&q) {
@@ -817,7 +839,7 @@ async fn stuff(
     };
 
     let result =
-        match graphql::cache::process_query(query, cache, None, forward_graphql_request).await {
+        match graphql::cache::process_query(query, cache, auth_token, forward_graphql_request).await {
             Ok(r) => format!("{}", r.to_string()),
             Err(e) => format!("{:?}", e),
         };

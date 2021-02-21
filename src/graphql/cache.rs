@@ -120,8 +120,8 @@ fn update_cache<'a>(
     }
 }
 
-fn to_private_cache_key(user_id: &String, cache_key: &String) -> String {
-    format!("{} {}", user_id, cache_key)
+fn to_private_cache_key(user_id: &str, cache_key: &str) -> String {
+    [ user_id, cache_key ].join("")
 }
 
 fn get_cache_values<'a>(
@@ -137,13 +137,12 @@ fn get_cache_values<'a>(
 
     cacheable_fields
         .into_iter()
-        .map(|fields| {
+        .map(|fields|
             (
                 fields_to_cache_key(&fields),
                 extract_mut(&mut value, &fields_to_json_path(&fields)),
                 fields,
-            )
-        })
+            ))
         .filter(|(_, v, _)| v.is_some())
         .map(|(cache_key, v, path)| (cache_key, dealias_fields(v.unwrap(), &path)))
         .collect::<Vec<_>>()
@@ -577,6 +576,48 @@ mod tests {
         assert_eq!(
             result2,
             json!({"data":{"field1":{"subfield1":55, "subfield3":999}}})
+        );
+    }
+
+    #[tokio::test]
+    async fn process_query_handles_deep_field_cache() {
+        let cache = create_cache();
+
+        let query = "{field1(id: 10){subfield1{ subsubfield1 subsubfield2 } } }";
+        let query2 = "{field1(id: 10){subfield1{ subsubfield1 subsubfield2 } } }";
+
+        let parsed_query = parse_query(query).unwrap();
+        let parsed_query2 = parse_query(query2).unwrap();
+
+        let result1 = process_query(
+            parsed_query,
+            cache.clone(),
+            Some(String::from("u1")),
+            create_send_request(json!({"field1": {"subfield1":{ "subsubfield1": 123, "subsubfield2": 234 }}}), vec![
+                ( vec![ String::from("field1") ], 0, false ),
+                ( vec![ String::from("field1"), String::from("subfield1") ], 1000, false ),
+                ( vec![ String::from("field1"), String::from("subfield1"), String::from("subsubfield1") ], 200, true )
+               ])
+        )
+        .await
+        .unwrap();
+
+        let result2 = process_query(
+            parsed_query2,
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_not_called_send_request
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result1,
+            json!({"data":{"field1":{"subfield1": {"subsubfield1": 123, "subsubfield2": 234 }}}})
+        );
+        assert_eq!(
+            result2,
+            json!({"data":{"field1":{"subfield1": {"subsubfield1": 123, "subsubfield2": 234 }}}})
         );
     }
 
