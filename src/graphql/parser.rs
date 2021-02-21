@@ -78,16 +78,21 @@ pub fn parse_query<'a>(query: &'a str) -> Result<Document<'a>, Error> {
     }
 }
 
-// TODO  - Fix these repetitions:
-//    let mut first = true;
-//    for field in op.fields.iter() {
-//        if first {
-//            first = false;
-//        } else {
-//            serialized_document.push(' ')
-//        }
-//        serialize_field(field, &mut serialized_document);
-//    }
+fn append_element<'a, B, F>(mut string: String, iter: &'a [B], f: F) -> String 
+where F: Fn(&'a B, String) -> String {
+    let mut first = true;
+    for field in iter {
+        if first {
+            first = false;
+        } else {
+            string.push(' ');
+        }
+        string = f(field, string);
+    }
+
+    string
+}
+
 pub fn serialize_document<'a>(document: &Document<'a>) -> String {
     let op = document.operations.iter().nth(0).unwrap();
 
@@ -103,53 +108,28 @@ pub fn serialize_document<'a>(document: &Document<'a>) -> String {
         OperationType::Subscription => "subscription{",
     };
 
-    let mut first = true;
-    for field in op.fields.iter() {
-        if first {
-            first = false;
-        } else {
-            serialized_document.push(' ')
-        }
-        serialize_field(field, &mut serialized_document);
-    }
+    serialized_document = append_element(serialized_document, &op.fields, serialize_field);
     serialized_document.push('}');
-
-    let mut ffffiiirst = true;
-    for frag in document.fragment_definitions.iter() {
-        if ffffiiirst {
-            ffffiiirst = false
-        } else {
-            serialized_document.push(' ');
-        }
-
-        serialize_fragment(frag, &mut serialized_document);
-    }
+    serialized_document = append_element(serialized_document, &document.fragment_definitions, serialize_fragment);
 
     serialized_document
 }
 
-fn serialize_fragment<'a>(fragment: &FragmentDefinition<'a>, s1: &mut String) {
+fn serialize_fragment<'a>(fragment: &FragmentDefinition<'a>, mut s1: String) -> String {
     s1.push_str("fragment ");
     s1.push_str(fragment.name);
     s1.push_str(" on ");
     s1.push_str(fragment.r#type);
     s1.push('{');
 
-    let mut first = true;
-    for field in fragment.fields.iter() {
-        if first {
-            first = false;
-        } else {
-            s1.push(' ');
-        }
-
-        serialize_field(field, s1);
-    }
+    s1 = append_element(s1, &fragment.fields, serialize_field);
 
     s1.push('}');
+
+    s1
 }
 
-fn serialize_field<'a>(field: &Field<'a>, s1: &mut String) {
+fn serialize_field<'a>(field: &Field<'a>, mut s1: String) -> String {
     match field {
         Field::Field {
             alias,
@@ -159,84 +139,67 @@ fn serialize_field<'a>(field: &Field<'a>, s1: &mut String) {
         } => {
             if let Some(a) = alias {
                 s1.push_str(a);
-                s1.push_str(":");
+                s1.push(':');
                 s1.push_str(name);
             } else {
-                s1.push_str(*name)
+                s1.push_str(name)
             };
 
             if parameters.len() > 0 {
                 s1.push('(');
-                
-                let mut first = true;
-                for parm in parameters.iter() {
-                    if first {
-                        first = false;
-                    } else {
-                        s1.push(' ');
-                    }
-                    s1.push_str(&serialize_parameter(parm));
-                }
+                s1 = append_element(s1, &parameters, serialize_parameter);
                 s1.push(')');
             }
 
             if fields.len() > 0 {
                 s1.push('{');
-
-                let mut first = true;
-                for field in fields.iter() {
-                    if first {
-                        first = false;
-                    } else {
-                        s1.push(' ');
-                    }
-
-                    serialize_field(field, s1);
-                }
+                s1 = append_element(s1, &fields, serialize_field);
                 s1.push('}');
             }
+
+            s1
         }
         Field::Fragment { name } => {
             s1.push_str("...");
             s1.push_str(name);
+
+            s1
         }
     }
 }
 
-fn serialize_parameter<'a>(parameter: &Parameter<'a>) -> String {
-    String::from(parameter.name) + ":" + serialize_parameter_value(&parameter.value).as_str()
+fn serialize_parameter<'a>(parameter: &Parameter<'a>, mut s1: String) -> String {
+    s1.push_str(parameter.name);
+    s1.push(':');
+    
+    serialize_parameter_value(&parameter.value, s1)
 }
 
-fn serialize_parameter_value<'a>(value: &ParameterValue<'a>) -> String {
+fn serialize_parameter_value<'a>(value: &ParameterValue<'a>, mut s1: String) -> String {
     match value {
-        ParameterValue::Scalar(s) => String::from(*s),
-        ParameterValue::Variable(v) => format!("${}", v),
-        ParameterValue::Nil => String::from("null"),
+        ParameterValue::Scalar(s) => s1.push_str(s),
+        ParameterValue::Variable(v) => s1.push_str(&format!("${}", v)),
+        ParameterValue::Nil => s1.push_str("null"),
         ParameterValue::Object(o) => {
-            let mut result = String::from("{");
-            result += &o.iter().fold(String::new(), |acc, v| {
-                acc + " " + serialize_parameter_field(v).as_str()
-            });
-            result += "}";
-
-            result
+            s1.push('{');
+            s1 = append_element(s1, o, serialize_parameter_field);
+            s1.push('}');
         }
         ParameterValue::List(l) => {
-            let mut result = String::from("[");
-            result += &l.iter().fold(String::new(), |acc, v| {
-                acc + " " + serialize_parameter_value(v).as_str()
-            });
-            result += "]";
-
-            result
+            s1.push('[');
+            s1 = append_element(s1, l, serialize_parameter_value);
+            s1.push(']');
         }
-    }
+    };
+
+    s1
 }
 
-fn serialize_parameter_field<'a>(parameter_field: &ParameterField<'a>) -> String {
-    String::from(parameter_field.name)
-        + ":"
-        + serialize_parameter_value(&parameter_field.value).as_str()
+fn serialize_parameter_field<'a>(parameter_field: &ParameterField<'a>, mut s1: String) -> String {
+    s1.push_str(parameter_field.name);
+    s1.push(':');
+
+    serialize_parameter_value(&parameter_field.value, s1)
 }
 
 pub fn expand_operation<'a>(
