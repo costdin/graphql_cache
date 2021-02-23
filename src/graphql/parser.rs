@@ -118,9 +118,9 @@ pub fn serialize_document<'a>(document: &Document<'a>) -> String {
             serialize_variable,
         );
         serialized_document.push(')');
+        serialized_document.push('{');
     }
 
-    serialized_document.push('{');
     append_element(&mut serialized_document, &op.fields, serialize_field);
     serialized_document.push('}');
     append_element(
