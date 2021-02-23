@@ -19,14 +19,16 @@ pub fn create_cache() -> Arc<cache::Cache<String, Value>> {
 /// Execute all queries contained in the document against the cache.
 /// Any residual operation (mutation or subscription) is forwarded to the get_fn() function
 /// Any residual field (which couldn't be solved by the cache) is forwarded to the get_fn() function
-pub async fn process_query<'a, Fut>(
+pub async fn process_query<'a, F, Fut>(
     document: Document<'a>,
+    variables: Map<String, Value>,
     cache: Arc<cache::Cache<String, Value>>,
     user_id: Option<String>,
-    get_fn: impl Fn(Document<'a>) -> Fut,
+    get_fn: F,
 ) -> Result<Value, Error>
 where
-    Fut: Future<Output = (Result<Value, Error>, Document<'a>)>,
+    F: Fn(Document<'a>, Map<String, Value>) -> Fut,
+    Fut: Future<Output = (Result<Value, Error>, Document<'a>, Map<String, Value>)>,
 {
     // If at least one operation is not a query, forward the whole document to the getfn() function
     // TODO: Try to execute query operations against the cache
@@ -35,7 +37,7 @@ where
         .iter()
         .all(|op| op.operation_type == OperationType::Query)
     {
-        let (result, doc) = get_fn(document).await;
+        let (result, doc, var) = get_fn(document, variables).await;
         return result;
     }
 
@@ -49,7 +51,8 @@ where
         let mut residual_fields = Vec::<Field>::new();
         for field in expanded_operation.fields {
             let alias = String::from(field.get_alias());
-            let (residual_field, cached_field) = match_field_with_cache(field, &user_id, &cache);
+            let (residual_field, cached_field) =
+                match_field_with_cache(field, &variables, &user_id, &cache);
 
             match residual_field {
                 Some(f) => residual_fields.push(f),
@@ -84,11 +87,11 @@ where
             fragment_definitions: document.fragment_definitions,
         };
 
-        let (response, doc) = get_fn(document).await;
+        let (response, doc, var) = get_fn(document, variables).await;
         let result: GraphQLResponse = from_value(response?)?;
         let (mut response_data, hints) = result.compress_cache_hints();
 
-        update_cache(&cache, &user_id, hints, &doc.operations[0]);
+        update_cache(&cache, &user_id, hints, &doc.operations[0], &var);
 
         merge_json(&mut response_data, data_from_cache);
 
@@ -103,10 +106,12 @@ fn update_cache<'a>(
     user_id: &Option<String>,
     cache_hints: Vec<(Value, CacheHint)>,
     query: &Operation<'a>,
+    variables: &Map<String, Value>,
 ) {
     for (value, hint) in cache_hints.into_iter().filter(|h| h.1.path.len() > 0) {
         if let Some((traversed_fields, cached_field)) = query.traverse(&hint.path) {
-            for (cache_key, cache_value) in get_cache_values(traversed_fields, cached_field, value)
+            for (cache_key, cache_value) in
+                get_cache_values(traversed_fields, cached_field, variables, value)
             {
                 let cache_key = match (hint.scope, user_id) {
                     (CacheScope::PUBLIC, _) => cache_key,
@@ -127,6 +132,7 @@ fn to_private_cache_key(user_id: &str, cache_key: &str) -> String {
 fn get_cache_values<'a>(
     initial_path: Vec<&'a Field<'a>>,
     field: &'a Field<'a>,
+    variables: &Map<String, Value>,
     mut value: Value,
 ) -> Vec<(String, Value)> {
     let mut cacheable_fields = get_cacheable_fields(field, initial_path);
@@ -139,7 +145,7 @@ fn get_cache_values<'a>(
         .into_iter()
         .map(|fields| {
             (
-                fields_to_cache_key(&fields),
+                fields_to_cache_key(&fields, variables),
                 extract_mut(&mut value, &fields_to_json_path(&fields)),
                 fields,
             )
@@ -206,16 +212,25 @@ fn dealias_field(json_value: &mut Value, current_field: &Field) {
 
 fn match_field_with_cache<'a>(
     field: Field<'a>,
+    variables: &Map<String, Value>,
     user_id: &Option<String>,
     cache: &cache::Cache<String, Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
-    let cached_value = get_cached_item(&field_to_cache_key(&field), user_id, cache);
-    match_field_with_cache_recursive(&mut Vec::new(), field, user_id, cached_value, cache)
+    let cached_value = get_cached_item(&field_to_cache_key(&field, variables), user_id, cache);
+    match_field_with_cache_recursive(
+        &mut Vec::new(),
+        field,
+        variables,
+        user_id,
+        cached_value,
+        cache,
+    )
 }
 
 fn match_field_with_cache_recursive<'a>(
     stack: &mut Vec<String>,
     field: Field<'a>,
+    variables: &Map<String, Value>,
     user_id: &Option<String>,
     cached_value: Option<Value>,
     cache: &cache::Cache<String, Value>,
@@ -237,7 +252,7 @@ fn match_field_with_cache_recursive<'a>(
         _ => Map::new(),
     };
 
-    stack.push(field_to_cache_key(&field));
+    stack.push(field_to_cache_key(&field, variables));
 
     let (alias, name, subfields, parameters) = match field {
         Field::Field {
@@ -269,7 +284,7 @@ fn match_field_with_cache_recursive<'a>(
         // else if a subfield is unique, then extract the cache value from the cache object
         // else clone the cache value (so it can be used by the next duplicate)
         let field_from_cache = if subfield.has_parameters() {
-            let key = concatenate_cache_keys(stack, &subfield);
+            let key = concatenate_cache_keys(stack, &subfield, variables);
             get_cached_item(&key, user_id, cache)
         } else {
             match subfield_map.get_mut(subfield.get_name()) {
@@ -281,8 +296,14 @@ fn match_field_with_cache_recursive<'a>(
             }
         };
 
-        let (residual_subfield, from_cache) =
-            match_field_with_cache_recursive(stack, subfield, user_id, field_from_cache, cache);
+        let (residual_subfield, from_cache) = match_field_with_cache_recursive(
+            stack,
+            subfield,
+            variables,
+            user_id,
+            field_from_cache,
+            cache,
+        );
 
         match residual_subfield {
             Some(f) => residual_subfields.push(f),
@@ -319,39 +340,47 @@ fn match_field_with_cache_recursive<'a>(
     (residual_field_result, cache_result)
 }
 
-fn field_to_cache_key<'a>(field: &Field<'a>) -> String {
+fn field_to_cache_key<'a>(field: &Field<'a>, variables: &Map<String, Value>) -> String {
     let result = field.get_name().to_string();
     let parameters = field.get_parameters();
 
     if parameters.len() == 0 {
         result
     } else {
-        parameters
-            .iter()
-            .fold(result, |acc, p| append_parameter_to_cache_key(acc, p))
+        parameters.iter().fold(result, |acc, p| {
+            append_parameter_to_cache_key(acc, p, variables)
+        })
     }
 }
 
-fn append_parameter_to_cache_key<'a>(cache_key: String, parameter: &Parameter<'a>) -> String {
+fn append_parameter_to_cache_key<'a>(
+    cache_key: String,
+    parameter: &Parameter<'a>,
+    variables: &Map<String, Value>,
+) -> String {
     let result = cache_key + "_" + parameter.name;
 
     match &parameter.value {
         ParameterValue::Nil => result + "NIL",
         ParameterValue::Scalar(s) => result + s,
-        ParameterValue::Variable(v) => result + v,
+        ParameterValue::Variable(v) => result + &format!("VAR{:?}", variables[*v]),
         ParameterValue::Object(obj) => result + &format!("OBJ{:?}", obj),
         ParameterValue::List(lst) => result + &format!("LST{:?}", lst),
     }
 }
 
-fn concatenate_cache_keys<'a>(cache_keys: &[String], field: &Field<'a>) -> String {
-    cache_keys.join("+") + "+" + &field_to_cache_key(field)
+fn concatenate_cache_keys<'a>(
+    cache_keys: &[String],
+    field: &Field<'a>,
+    variables: &Map<String, Value>,
+) -> String {
+    cache_keys.join("+") + "+" + &field_to_cache_key(field, variables)
 }
 
-fn fields_to_cache_key<'a>(fields: &[&Field<'a>]) -> String {
+fn fields_to_cache_key<'a>(fields: &[&Field<'a>], variables: &Map<String, Value>) -> String {
     fields
         .iter()
-        .map(|f| field_to_cache_key(f))
+        .map(|f| field_to_cache_key(f, variables))
         .collect::<Vec<String>>()
         .join("+")
 }
@@ -438,6 +467,7 @@ mod tests {
 
         let result1 = process_query(
             parsed_query,
+            Map::new(),
             cache.clone(),
             Some(String::from("u1")),
             fake_send_request,
@@ -447,6 +477,7 @@ mod tests {
 
         let result2 = process_query(
             parsed_query2,
+            Map::new(),
             cache.clone(),
             Some(String::from("u1")),
             fake_not_called_send_request,
@@ -484,6 +515,7 @@ mod tests {
 
         let result1 = process_query(
             parsed_query,
+            Map::new(),
             cache.clone(),
             Some(String::from("u1")),
             create_send_request(expected_result_1.clone(), cache_hints),
@@ -493,6 +525,7 @@ mod tests {
 
         let result2 = process_query(
             parsed_query2,
+            Map::new(),
             cache.clone(),
             Some(String::from("u1")),
             fake_not_called_send_request,
@@ -516,6 +549,7 @@ mod tests {
 
         let result1 = process_query(
             parsed_query,
+            Map::new(),
             cache.clone(),
             Some(String::from("u1")),
             fake_send_request,
@@ -525,6 +559,7 @@ mod tests {
 
         let result2 = process_query(
             parsed_query2,
+            Map::new(),
             cache.clone(),
             Some(String::from("u1")),
             fake_not_called_send_request,
@@ -554,6 +589,7 @@ mod tests {
 
         let result1 = process_query(
             parsed_query,
+            Map::new(),
             cache.clone(),
             Some(String::from("u1")),
             fake_send_request,
@@ -563,6 +599,7 @@ mod tests {
 
         let result2 = process_query(
             parsed_query2,
+            Map::new(),
             cache.clone(),
             Some(String::from("u2")),
             create_send_request(json!({"field1": {"subfield3":999}}), vec![]),
@@ -592,6 +629,7 @@ mod tests {
 
         let result1 = process_query(
             parsed_query,
+            Map::new(),
             cache.clone(),
             Some(String::from("u1")),
             create_send_request(
@@ -620,6 +658,72 @@ mod tests {
 
         let result2 = process_query(
             parsed_query2,
+            Map::new(),
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_not_called_send_request,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result1,
+            json!({"data":{"field1":{"subfield1": {"subsubfield1": 123, "subsubfield2": 234 }}}})
+        );
+        assert_eq!(
+            result2,
+            json!({"data":{"field1":{"subfield1": {"subsubfield1": 123, "subsubfield2": 234 }}}})
+        );
+    }
+
+    #[tokio::test]
+    async fn process_query_handles_variables() {
+        let cache = create_cache();
+
+        let query = "query TheQuery($fieldId: ID!){field1(id: $fieldId){subfield1{ subsubfield1 subsubfield2 } } }";
+        let query2 = "query TheQuery($fieldId2: ID!){field1(id: $fieldId2){subfield1{ subsubfield1 subsubfield2 } } }";
+
+        let parsed_query = parse_query(query).unwrap();
+        let parsed_query2 = parse_query(query2).unwrap();
+
+        let mut variables = Map::new();
+        variables.insert(String::from("fieldId"), json!(20));
+
+        let mut variables2 = Map::new();
+        variables2.insert(String::from("fieldId2"), json!(20));
+
+        let result1 = process_query(
+            parsed_query,
+            variables,
+            cache.clone(),
+            Some(String::from("u1")),
+            create_send_request(
+                json!({"field1": {"subfield1":{ "subsubfield1": 123, "subsubfield2": 234 }}}),
+                vec![
+                    (vec![String::from("field1")], 0, false),
+                    (
+                        vec![String::from("field1"), String::from("subfield1")],
+                        1000,
+                        false,
+                    ),
+                    (
+                        vec![
+                            String::from("field1"),
+                            String::from("subfield1"),
+                            String::from("subsubfield1"),
+                        ],
+                        200,
+                        true,
+                    ),
+                ],
+            ),
+        )
+        .await
+        .unwrap();
+
+        let result2 = process_query(
+            parsed_query2,
+            variables2,
             cache.clone(),
             Some(String::from("u1")),
             fake_not_called_send_request,
@@ -643,14 +747,18 @@ mod tests {
     ) -> Box<
         dyn Fn(
             Document<'a>,
-        ) -> Pin<Box<dyn Future<Output = (Result<Value, Error>, Document<'a>)> + '_>>,
+            Map<String, Value>,
+        ) -> Pin<
+            Box<dyn Future<Output = (Result<Value, Error>, Document<'a>, Map<String, Value>)> + '_>,
+        >,
     > {
-        Box::new(move |d| Box::pin(fake_send_request_p(data.clone(), cache_hints.clone(), d)))
+        Box::new(move |d, v| Box::pin(fake_send_request_p(data.clone(), cache_hints.clone(), d)))
     }
 
     async fn fake_not_called_send_request<'a>(
         _: Document<'a>,
-    ) -> (Result<Value, Error>, Document<'a>) {
+        _: Map<String, Value>,
+    ) -> (Result<Value, Error>, Document<'a>, Map<String, Value>) {
         panic!("This method should never be called")
     }
 
@@ -658,7 +766,7 @@ mod tests {
         data: Value,
         cache_hints: Vec<(Vec<String>, i16, bool)>,
         document: Document<'a>,
-    ) -> (Result<Value, Error>, Document<'a>) {
+    ) -> (Result<Value, Error>, Document<'a>, Map<String, Value>) {
         let cache_hints = cache_hints
             .iter()
             .map(|(path, max_age, is_private)| {
@@ -682,10 +790,13 @@ mod tests {
             }
         ));
 
-        (result, document)
+        (result, document, Map::new())
     }
 
-    async fn fake_send_request<'a>(document: Document<'a>) -> (Result<Value, Error>, Document<'a>) {
+    async fn fake_send_request<'a>(
+        document: Document<'a>,
+        variables: Map<String, Value>,
+    ) -> (Result<Value, Error>, Document<'a>, Map<String, Value>) {
         let result = Ok(json!(
             {
                 "data": {
@@ -719,6 +830,6 @@ mod tests {
             }
         ));
 
-        (result, document)
+        (result, document, variables)
     }
 }

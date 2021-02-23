@@ -5,6 +5,7 @@ use graphql::parser::{parse_query, serialize_document};
 use graphql_deserializer::CacheScope;
 use rand::Rng;
 use serde_json::json;
+use serde_json::Map;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -539,8 +540,8 @@ async fn test_things() -> Result<(), graphql::parser::Error> {
     let query = "{f1{a: f2 f3 f4(id: 13)}}";
     let parsed_query = graphql::parser::parse_query(query)?;
 
-    let fff = |d| send_request(d);
-    match graphql::cache::process_query(parsed_query, cache, None, send_request).await {
+    let fff = |d, v| send_request(d, v);
+    match graphql::cache::process_query(parsed_query, Map::new(), cache, None, send_request).await {
         Ok(r) => println!("{:#?}", r),
         Err(e) => println!("{:?}", e),
     };
@@ -565,6 +566,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
 
     match graphql::cache::process_query(
         parsed_query,
+        Map::new(),
         cache.clone(),
         Some(String::from("u1")),
         send_request2,
@@ -584,6 +586,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
 
     match graphql::cache::process_query(
         parsed_query_clone,
+        Map::new(),
         cache.clone(),
         Some(String::from("u2")),
         send_request2,
@@ -603,6 +606,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
 
     match graphql::cache::process_query(
         parsed_query2,
+        Map::new(),
         cache.clone(),
         Some(String::from("u1")),
         send_request2,
@@ -622,6 +626,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
 
     match graphql::cache::process_query(
         parsed_query3,
+        Map::new(),
         cache.clone(),
         Some(String::from("u1")),
         send_request2,
@@ -641,6 +646,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
 
     match graphql::cache::process_query(
         parsed_query4,
+        Map::new(),
         cache.clone(),
         Some(String::from("u1")),
         send_request2,
@@ -660,6 +666,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
 
     match graphql::cache::process_query(
         parsed_query5,
+        Map::new(),
         cache,
         Some(String::from("u1")),
         send_request2,
@@ -682,14 +689,17 @@ fn parse<'a, T, NomParser>(input: &'a str, parser: NomParser) -> ParseResult<'a,
 
 async fn forward_graphql_request<'a>(
     document: graphql::parser::Document<'a>,
+    variables: Map<String, Value>,
 ) -> (
     Result<Value, graphql::parser::Error>,
     graphql::parser::Document<'a>,
+    Map<String, Value>,
 ) {
     let sss = serialize_document(&document);
     println!("Request: {}", sss);
     let mut map = HashMap::new();
-    map.insert("query", sss);
+    map.insert("query", Value::String(sss));
+    map.insert("variables", Value::Object(variables));
 
     let client = reqwest::Client::new();
     let res = client
@@ -697,6 +707,11 @@ async fn forward_graphql_request<'a>(
         .json(&map)
         .send()
         .await;
+
+    let the_v = match map.remove("variables") {
+        Some(Value::Object(v)) => v,
+        _ => Map::new(),
+    };
 
     let resp = match res {
         Ok(r) => r.json::<Value>().await,
@@ -707,6 +722,7 @@ async fn forward_graphql_request<'a>(
                     e
                 ))),
                 document,
+                the_v,
             )
         }
     };
@@ -714,22 +730,25 @@ async fn forward_graphql_request<'a>(
     //println!("Response: {:#?}", resp);
 
     match resp {
-        Ok(r) => (Ok(r), document),
+        Ok(r) => (Ok(r), document, the_v),
         Err(e) => (
             Err(graphql::parser::Error::new(format!(
                 "Deserialization error: {:?}",
                 e
             ))),
             document,
+            the_v,
         ),
     }
 }
 
 async fn send_request<'a>(
     document: graphql::parser::Document<'a>,
+    variables: Map<String, Value>,
 ) -> (
     Result<Value, graphql::parser::Error>,
     graphql::parser::Document<'a>,
+    Map<String, Value>,
 ) {
     println!("{:#?}", serialize_document(&document));
     sleep(Duration::from_secs(4)).await;
@@ -760,14 +779,16 @@ async fn send_request<'a>(
         }
     ));
 
-    (result, document)
+    (result, document, variables)
 }
 
 async fn send_request2<'a>(
     document: graphql::parser::Document<'a>,
+    variables: Map<String, Value>,
 ) -> (
     Result<Value, graphql::parser::Error>,
     graphql::parser::Document<'a>,
+    Map<String, Value>,
 ) {
     println!("{:#?}", document);
 
@@ -804,7 +825,7 @@ async fn send_request2<'a>(
         }
     ));
 
-    (result, document)
+    (result, document, variables)
 }
 
 fn test_borrow() -> String {
@@ -821,7 +842,7 @@ async fn stuff(
     //param: String,
     //agent: String,
     addr_opt: Option<SocketAddr>,
-    body: HashMap<String, String>,
+    mut body: HashMap<String, Value>,
     auth_token: Option<String>,
     cache: Arc<graphql::cache::cache::Cache<String, Value>>,
 ) -> Result<impl warp::Reply, Infallible> {
@@ -830,16 +851,38 @@ async fn stuff(
     //    None => println!("Request from anonymous"),
     //};
 
-    let query = match body.get("query") {
-        Some(q) => match graphql::parser::parse_query(&q) {
-            Ok(r) => r,
-            Err(_) => return Ok(format!("nein")),
-        },
-        None => return Ok(format!("no")),
+    let q = match body.remove("query") {
+        Some(Value::String(q)) => q,
+        _ => return Ok(format!("no")),
+    };
+
+    let document = match graphql::parser::parse_query(&q) {
+        Ok(r) => r,
+        Err(_) => return Ok(format!("nein")),
+    };
+
+    let variables = match body.remove("variables") {
+        Some(Value::Object(map)) => map,
+        Some(_) => return Ok(format!("nein variables")),
+        None => serde_json::Map::<String, Value>::new(),
+    };
+
+    let document = if document.operations.len() > 1 {
+        if let Some(Value::String(operation_name)) = body.remove("operationName") {
+            match document.filter_operation(&operation_name) {
+                Ok(d) => d,
+                Err(e) => return Ok(String::from("operationName ist gulen")),
+            }
+        } else {
+            return Ok(format!("nein operationName"));
+        }
+    } else {
+        document
     };
 
     let result = match graphql::cache::process_query(
-        query,
+        document,
+        variables,
         cache,
         auth_token,
         forward_graphql_request,

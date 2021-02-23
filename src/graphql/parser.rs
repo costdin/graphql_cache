@@ -99,15 +99,28 @@ pub fn serialize_document<'a>(document: &Document<'a>) -> String {
     let mut serialized_document = String::with_capacity(500)
         + match op.operation_type {
             OperationType::Query
-                if document.operations.len() == 1 && document.fragment_definitions.len() == 0 =>
+                if document.operations.len() == 1
+                    && document.fragment_definitions.len() == 0
+                    && document.operations[0].variables.len() == 0 =>
             {
                 "{"
             }
-            OperationType::Query => "query{",
-            OperationType::Mutation => "mutation{",
-            OperationType::Subscription => "subscription{",
+            OperationType::Query => "query",
+            OperationType::Mutation => "mutation",
+            OperationType::Subscription => "subscription",
         };
 
+    if document.operations[0].variables.len() > 0 {
+        serialized_document.push('(');
+        append_element(
+            &mut serialized_document,
+            &document.operations[0].variables,
+            serialize_variable,
+        );
+        serialized_document.push(')');
+    }
+
+    serialized_document.push('{');
     append_element(&mut serialized_document, &op.fields, serialize_field);
     serialized_document.push('}');
     append_element(
@@ -166,6 +179,21 @@ fn serialize_field<'a>(field: &Field<'a>, s1: &mut String) {
     }
 }
 
+fn serialize_variable<'a>(variable: &Variable<'a>, s1: &mut String) {
+    s1.push('$');
+    s1.push_str(variable.name);
+    s1.push(':');
+    s1.push_str(variable.r#type);
+
+    match &variable.default_value {
+        Some(value) => {
+            s1.push('=');
+            serialize_parameter_value(value, s1);
+        }
+        _ => {}
+    }
+}
+
 fn serialize_parameter<'a>(parameter: &Parameter<'a>, s1: &mut String) {
     s1.push_str(parameter.name);
     s1.push(':');
@@ -200,7 +228,7 @@ fn serialize_parameter_field<'a>(parameter_field: &ParameterField<'a>, s1: &mut 
 
 pub fn expand_operation<'a>(
     operation: Operation<'a>,
-    fragment_definitions: &Vec<FragmentDefinition<'a>>,
+    fragment_definitions: &[FragmentDefinition<'a>],
 ) -> Result<Operation<'a>, Error> {
     let mut new_fields = Vec::new();
 
@@ -224,7 +252,7 @@ pub fn expand_operation<'a>(
 
 fn expand_fragment<'a>(
     field: Field<'a>,
-    fragments: &Vec<FragmentDefinition<'a>>,
+    fragments: &[FragmentDefinition<'a>],
 ) -> Result<Vec<Field<'a>>, Error> {
     let fields = match field {
         Field::Fragment { name } => {
@@ -653,6 +681,16 @@ where
     }
 }
 
+fn is_valid_variable_type(string: &str) -> bool {
+    let mut chars = string.chars();
+
+    match chars.next_back() {
+        Some(c) if c == '!' || c.is_alphabetic() => chars.all(|c| c.is_alphanumeric() || c == '_'),
+        Some(_) => false,
+        None => false,
+    }
+}
+
 fn is_valid_name(string: &str) -> bool {
     let mut chars = string.chars();
 
@@ -677,7 +715,7 @@ fn is_valid_type<'a, I>(string: &str, _tokens: &mut I, _parser_state: &mut Parse
 where
     I: Iterator<Item = &'a str>,
 {
-    is_valid_name(string)
+    is_valid_variable_type(string)
 }
 
 fn is_matching_close_parenteses(close: &str, open_option: Option<&str>) -> bool {
@@ -688,6 +726,25 @@ fn is_matching_close_parenteses(close: &str, open_option: Option<&str>) -> bool 
                 || (close == "]" && open == "[")
         }
         None => false,
+    }
+}
+
+impl<'a> Document<'a> {
+    pub fn filter_operation(self, operation_name: &str) -> Result<Document<'a>, Error> {
+        let op = match self
+            .operations
+            .into_iter()
+            .filter(|o| o.name.unwrap_or("") == operation_name)
+            .nth(0)
+        {
+            Some(o) => o,
+            None => return Err(Error::new(format!("operationName ist gulen"))),
+        };
+
+        return Ok(Document {
+            operations: vec![op],
+            fragment_definitions: self.fragment_definitions,
+        });
     }
 }
 
