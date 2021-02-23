@@ -1,8 +1,8 @@
 pub mod cache;
 use crate::graphql::json::{extract_mut, merge_json};
 use crate::graphql::parser::{
-    expand_operation, Document, Error, Field, Operation, OperationType, Parameter, ParameterValue,
-    Traversable,
+    expand_operation, Document, Error, Field, FragmentDefinition, Operation, OperationType,
+    Parameter, ParameterValue, Traversable,
 };
 use crate::graphql_deserializer::{CacheHint, CacheScope, GraphQLResponse};
 use serde_json::map::Map;
@@ -16,83 +16,66 @@ pub fn create_cache() -> Arc<cache::Cache<String, Value>> {
     cache::Cache::new()
 }
 
-/// Execute all queries contained in the document against the cache.
-/// Any residual operation (mutation or subscription) is forwarded to the get_fn() function
+/// Executes an operation against the cache.
 /// Any residual field (which couldn't be solved by the cache) is forwarded to the get_fn() function
-pub async fn process_query<'a, F, Fut>(
-    document: Document<'a>,
+pub async fn execute_operation<'a, F, Fut>(
+    operation: Operation<'a>,
+    fragment_definitions: Vec<FragmentDefinition<'a>>,
     variables: Map<String, Value>,
     cache: Arc<cache::Cache<String, Value>>,
     user_id: Option<String>,
     get_fn: F,
 ) -> Result<Value, Error>
 where
-    F: Fn(Document<'a>, Map<String, Value>) -> Fut,
-    Fut: Future<Output = (Result<Value, Error>, Document<'a>, Map<String, Value>)>,
+    F: Fn(Operation<'a>, Map<String, Value>) -> Fut,
+    Fut: Future<Output = (Result<Value, Error>, Operation<'a>, Map<String, Value>)>,
 {
-    // If at least one operation is not a query, forward the whole document to the getfn() function
-    // TODO: Try to execute query operations against the cache
-    if !document
-        .operations
-        .iter()
-        .all(|op| op.operation_type == OperationType::Query)
-    {
-        let (result, doc, var) = get_fn(document, variables).await;
+    // If the operation is not a query, forward the whole document to the getfn() function
+    if operation.operation_type != OperationType::Query {
+        let (result, doc, var) = get_fn(operation, variables).await;
         return result;
     }
 
     let mut cached_result = Map::new();
-    let mut residual_operations = Vec::<Operation>::new();
-    for operation in document.operations {
-        // Replace all fragments with actual fields
-        // Expanded operation does not contain any fragment
-        let expanded_operation = expand_operation(operation, &document.fragment_definitions)?;
 
-        let mut residual_fields = Vec::<Field>::new();
-        for field in expanded_operation.fields {
-            let alias = String::from(field.get_alias());
-            let (residual_field, cached_field) =
-                match_field_with_cache(field, &variables, &user_id, &cache);
+    // Replace all fragments with actual fields
+    // Expanded operation does not contain any fragment
+    let expanded_operation = expand_operation(operation, fragment_definitions)?;
 
-            match residual_field {
-                Some(f) => residual_fields.push(f),
-                None => {}
-            };
+    let mut residual_fields = Vec::<Field>::new();
+    for field in expanded_operation.fields {
+        let alias = String::from(field.get_alias());
+        let (residual_field, cached_field) =
+            match_field_with_cache(field, &variables, &user_id, &cache);
 
-            match cached_field {
-                Some(r) => {
-                    cached_result.insert(alias, r);
-                }
-                None => {}
-            };
-        }
+        match residual_field {
+            Some(f) => residual_fields.push(f),
+            None => {}
+        };
 
-        if residual_fields.len() > 0 {
-            let operation = Operation {
-                name: expanded_operation.name,
-                fields: residual_fields,
-                variables: expanded_operation.variables,
-                operation_type: expanded_operation.operation_type,
-            };
-
-            residual_operations.push(operation);
-        }
+        match cached_field {
+            Some(r) => {
+                cached_result.insert(alias, r);
+            }
+            None => {}
+        };
     }
 
     let data_from_cache = Value::Object(cached_result);
 
-    if residual_operations.len() > 0 {
-        let document = Document {
-            operations: residual_operations,
-            fragment_definitions: document.fragment_definitions,
+    if residual_fields.len() > 0 {
+        let operation = Operation {
+            name: expanded_operation.name,
+            fields: residual_fields,
+            variables: expanded_operation.variables,
+            operation_type: expanded_operation.operation_type,
         };
 
-        let (response, doc, var) = get_fn(document, variables).await;
+        let (response, op, var) = get_fn(operation, variables).await;
         let result: GraphQLResponse = from_value(response?)?;
         let (mut response_data, hints) = result.compress_cache_hints();
 
-        update_cache(&cache, &user_id, hints, &doc.operations[0], &var);
-
+        update_cache(&cache, &user_id, hints, &op, &var);
         merge_json(&mut response_data, data_from_cache);
 
         Ok(json!({ "data": response_data }))
@@ -457,7 +440,7 @@ mod tests {
     use std::pin::Pin;
 
     #[tokio::test]
-    async fn process_query_does_not_send_request_if_all_fields_are_cached() {
+    async fn execute_operation_does_not_send_request_if_all_fields_are_cached() {
         let cache = create_cache();
 
         let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
@@ -465,8 +448,9 @@ mod tests {
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query).unwrap();
 
-        let result1 = process_query(
-            parsed_query,
+        let result1 = execute_operation(
+            parsed_query.operations.into_iter().nth(0).unwrap(),
+            parsed_query.fragment_definitions,
             Map::new(),
             cache.clone(),
             Some(String::from("u1")),
@@ -475,8 +459,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result2 = process_query(
-            parsed_query2,
+        let result2 = execute_operation(
+            parsed_query2.operations.into_iter().nth(0).unwrap(),
+            parsed_query2.fragment_definitions,
             Map::new(),
             cache.clone(),
             Some(String::from("u1")),
@@ -489,7 +474,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_query_doesnt_send_request_if_all_fields_are_cached2() {
+    async fn execute_operation_doesnt_send_request_if_all_fields_are_cached2() {
         let cache = create_cache();
 
         let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
@@ -513,8 +498,9 @@ mod tests {
             ),
         ];
 
-        let result1 = process_query(
-            parsed_query,
+        let result1 = execute_operation(
+            parsed_query.operations.into_iter().nth(0).unwrap(),
+            parsed_query.fragment_definitions,
             Map::new(),
             cache.clone(),
             Some(String::from("u1")),
@@ -523,8 +509,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result2 = process_query(
-            parsed_query2,
+        let result2 = execute_operation(
+            parsed_query2.operations.into_iter().nth(0).unwrap(),
+            parsed_query2.fragment_definitions,
             Map::new(),
             cache.clone(),
             Some(String::from("u1")),
@@ -538,7 +525,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_query_doesnt_send_request_if_all_fields_are_cached_and_aliased() {
+    async fn execute_operation_doesnt_send_request_if_all_fields_are_cached_and_aliased() {
         let cache = create_cache();
 
         let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
@@ -547,8 +534,9 @@ mod tests {
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query2).unwrap();
 
-        let result1 = process_query(
-            parsed_query,
+        let result1 = execute_operation(
+            parsed_query.operations.into_iter().nth(0).unwrap(),
+            parsed_query.fragment_definitions,
             Map::new(),
             cache.clone(),
             Some(String::from("u1")),
@@ -557,8 +545,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result2 = process_query(
-            parsed_query2,
+        let result2 = execute_operation(
+            parsed_query2.operations.into_iter().nth(0).unwrap(),
+            parsed_query2.fragment_definitions,
             Map::new(),
             cache.clone(),
             Some(String::from("u1")),
@@ -578,7 +567,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_query_does_not_get_value_from_private_caches_for_different_users() {
+    async fn execute_operation_does_not_get_value_from_private_caches_for_different_users() {
         let cache = create_cache();
 
         let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
@@ -587,8 +576,9 @@ mod tests {
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query2).unwrap();
 
-        let result1 = process_query(
-            parsed_query,
+        let result1 = execute_operation(
+            parsed_query.operations.into_iter().nth(0).unwrap(),
+            parsed_query.fragment_definitions,
             Map::new(),
             cache.clone(),
             Some(String::from("u1")),
@@ -597,8 +587,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result2 = process_query(
-            parsed_query2,
+        let result2 = execute_operation(
+            parsed_query2.operations.into_iter().nth(0).unwrap(),
+            parsed_query2.fragment_definitions,
             Map::new(),
             cache.clone(),
             Some(String::from("u2")),
@@ -618,7 +609,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_query_handles_deep_field_cache() {
+    async fn execute_operation_handles_deep_field_cache() {
         let cache = create_cache();
 
         let query = "{field1(id: 10){subfield1{ subsubfield1 subsubfield2 } } }";
@@ -627,8 +618,9 @@ mod tests {
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query2).unwrap();
 
-        let result1 = process_query(
-            parsed_query,
+        let result1 = execute_operation(
+            parsed_query.operations.into_iter().nth(0).unwrap(),
+            parsed_query.fragment_definitions,
             Map::new(),
             cache.clone(),
             Some(String::from("u1")),
@@ -656,8 +648,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result2 = process_query(
-            parsed_query2,
+        let result2 = execute_operation(
+            parsed_query2.operations.into_iter().nth(0).unwrap(),
+            parsed_query2.fragment_definitions,
             Map::new(),
             cache.clone(),
             Some(String::from("u1")),
@@ -677,7 +670,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_query_handles_variables() {
+    async fn execute_operation_handles_variables() {
         let cache = create_cache();
 
         let query = "query TheQuery($fieldId: ID!){field1(id: $fieldId){subfield1{ subsubfield1 subsubfield2 } } }";
@@ -692,8 +685,9 @@ mod tests {
         let mut variables2 = Map::new();
         variables2.insert(String::from("fieldId2"), json!(20));
 
-        let result1 = process_query(
-            parsed_query,
+        let result1 = execute_operation(
+            parsed_query.operations.into_iter().nth(0).unwrap(),
+            parsed_query.fragment_definitions,
             variables,
             cache.clone(),
             Some(String::from("u1")),
@@ -721,8 +715,9 @@ mod tests {
         .await
         .unwrap();
 
-        let result2 = process_query(
-            parsed_query2,
+        let result2 = execute_operation(
+            parsed_query2.operations.into_iter().nth(0).unwrap(),
+            parsed_query2.fragment_definitions,
             variables2,
             cache.clone(),
             Some(String::from("u1")),
@@ -746,27 +741,30 @@ mod tests {
         cache_hints: Vec<(Vec<String>, i16, bool)>,
     ) -> Box<
         dyn Fn(
-            Document<'a>,
+            Operation<'a>,
             Map<String, Value>,
         ) -> Pin<
-            Box<dyn Future<Output = (Result<Value, Error>, Document<'a>, Map<String, Value>)> + '_>,
+            Box<
+                dyn Future<Output = (Result<Value, Error>, Operation<'a>, Map<String, Value>)> + '_,
+            >,
         >,
     > {
-        Box::new(move |d, v| Box::pin(fake_send_request_p(data.clone(), cache_hints.clone(), d)))
+        Box::new(move |d, v| Box::pin(fake_send_request_p(data.clone(), cache_hints.clone(), d, v)))
     }
 
     async fn fake_not_called_send_request<'a>(
-        _: Document<'a>,
+        _: Operation<'a>,
         _: Map<String, Value>,
-    ) -> (Result<Value, Error>, Document<'a>, Map<String, Value>) {
+    ) -> (Result<Value, Error>, Operation<'a>, Map<String, Value>) {
         panic!("This method should never be called")
     }
 
     async fn fake_send_request_p<'a>(
         data: Value,
         cache_hints: Vec<(Vec<String>, i16, bool)>,
-        document: Document<'a>,
-    ) -> (Result<Value, Error>, Document<'a>, Map<String, Value>) {
+        document: Operation<'a>,
+        variables: Map<String, Value>,
+    ) -> (Result<Value, Error>, Operation<'a>, Map<String, Value>) {
         let cache_hints = cache_hints
             .iter()
             .map(|(path, max_age, is_private)| {
@@ -790,13 +788,13 @@ mod tests {
             }
         ));
 
-        (result, document, Map::new())
+        (result, document, variables)
     }
 
     async fn fake_send_request<'a>(
-        document: Document<'a>,
+        document: Operation<'a>,
         variables: Map<String, Value>,
-    ) -> (Result<Value, Error>, Document<'a>, Map<String, Value>) {
+    ) -> (Result<Value, Error>, Operation<'a>, Map<String, Value>) {
         let result = Ok(json!(
             {
                 "data": {

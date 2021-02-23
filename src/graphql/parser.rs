@@ -93,36 +93,45 @@ where
     }
 }
 
-pub fn serialize_document<'a>(document: &Document<'a>) -> String {
-    let op = document.operations.iter().nth(0).unwrap();
+pub fn serialize_operation<'a>(operation: &Operation<'a>) -> String {
+    internal_serialize_operation(operation, false)
+}
 
-    let mut serialized_document = String::with_capacity(500)
-        + match op.operation_type {
-            OperationType::Query
-                if document.operations.len() == 1
-                    && document.fragment_definitions.len() == 0
-                    && document.operations[0].variables.len() == 0 =>
-            {
-                "{"
-            }
+fn internal_serialize_operation<'a>(operation: &Operation<'a>, disable_shorthand: bool) -> String {
+    let mut serialized_operation = String::with_capacity(500)
+        + match operation.operation_type {
+            OperationType::Query if operation.variables.len() == 0 && !disable_shorthand => "",
             OperationType::Query => "query",
             OperationType::Mutation => "mutation",
             OperationType::Subscription => "subscription",
         };
 
-    if document.operations[0].variables.len() > 0 {
-        serialized_document.push('(');
+    if operation.variables.len() > 0 {
+        serialized_operation.push('(');
         append_element(
-            &mut serialized_document,
-            &document.operations[0].variables,
+            &mut serialized_operation,
+            &operation.variables,
             serialize_variable,
         );
-        serialized_document.push(')');
-        serialized_document.push('{');
+        serialized_operation.push(')');
     }
 
-    append_element(&mut serialized_document, &op.fields, serialize_field);
-    serialized_document.push('}');
+    serialized_operation.push('{');
+    append_element(
+        &mut serialized_operation,
+        &operation.fields,
+        serialize_field,
+    );
+    serialized_operation.push('}');
+
+    serialized_operation
+}
+
+pub fn serialize_document<'a>(document: &Document<'a>) -> String {
+    let op = document.operations.iter().nth(0).unwrap();
+    let mut serialized_document =
+        internal_serialize_operation(op, document.fragment_definitions.len() > 0);
+
     append_element(
         &mut serialized_document,
         &document.fragment_definitions,
@@ -228,7 +237,7 @@ fn serialize_parameter_field<'a>(parameter_field: &ParameterField<'a>, s1: &mut 
 
 pub fn expand_operation<'a>(
     operation: Operation<'a>,
-    fragment_definitions: &[FragmentDefinition<'a>],
+    fragment_definitions: Vec<FragmentDefinition<'a>>,
 ) -> Result<Operation<'a>, Error> {
     let mut new_fields = Vec::new();
 
@@ -237,7 +246,7 @@ pub fn expand_operation<'a>(
     }
 
     for field in operation.fields {
-        for f in expand_fragment(field, fragment_definitions)? {
+        for f in expand_fragment(field, &fragment_definitions)? {
             new_fields.push(f);
         }
     }
@@ -361,6 +370,12 @@ where
             curly_bracket @ Some("{") => (curly_bracket, Some(name), Vec::<Variable>::new()),
             Some(s) => return Err(Error::new(format!("invalid token {}", s))),
             None => return Err(Error::new(String::from("Unexpected end of string"))),
+        },
+        Some("(") => {
+            parser_state.hierarchy.push("(");
+            let variables = parse_variables(tokens, parser_state)?;
+
+            (tokens.next(), None, variables)
         },
         Some(s) => return Err(Error::new(format!("invalid token {}", s))),
         None => return Err(Error::new(String::from("Unexpected end of string"))),
@@ -1230,6 +1245,15 @@ mod tests {
     #[test]
     fn parsed_query_with_parameter_can_be_serialized() {
         let query = "{launch(id:109){id site mission{name}}}";
+        let parsed_query = parse_query(query).unwrap();
+        let serialized_query = serialize_document(&parsed_query);
+
+        assert_eq!(query, serialized_query);
+    }
+
+    #[test]
+    fn parsed_nameless_query_with_parameter_can_be_serialized() {
+        let query = "query($launchId:Int!){launch(id:$launchId){id site mission{name}}}";
         let parsed_query = parse_query(query).unwrap();
         let serialized_query = serialize_document(&parsed_query);
 
