@@ -1,6 +1,7 @@
 mod graphql;
 mod graphql_deserializer;
 
+use graphql::cache::{MemoryCache, RedisCache};
 use graphql::parser::{parse_query, serialize_document, serialize_operation};
 use graphql_deserializer::CacheScope;
 use rand::Rng;
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio::time::sleep;
 use warp::Filter;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() {
     /*let now = Instant::now();
     for _ in 0..10000 {
@@ -69,7 +70,10 @@ async fn main() {
     };
     */
     
-    let cache = graphql::cache::create_cache();
+    let cache = match graphql::cache::RedisCache::new("redis://u0:pass@192.168.1.186") {
+        Ok(c) => c,
+        _ => return
+    };
 
     //    let auth_token = warp::cookie::optional("auth_token");
     let auth_token = warp::header::optional("x-auth");
@@ -160,8 +164,9 @@ fn test_parser() -> String {
     return String::from("Ok");
 }
 
+/*
 fn test_cache_cleanup() -> String {
-    let cache = graphql::cache::create_cache();
+    let cache = graphql::cache::MemoryCache::new();
     //let trtr2 = vec!(String::from("asd1"), String::from("hjk"), String::from("poi"));
     //let trtr = vec!(String::from("asd"), String::from("hjk"), String::from("poi"));
     let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
@@ -197,14 +202,15 @@ fn test_cache_cleanup() -> String {
 
     thread.join();
 
-    let (read, expired, write) = cache.get_ops_count();
-    println!("read: {} - expired: {} - write {}", read, expired, write);
+    //let (read, expired, write) = cache.get_ops_count();
+    //println!("read: {} - expired: {} - write {}", read, expired, write);
 
     String::from("Ok")
 }
+*/
 
 fn test_cache_small() -> String {
-    let cache = graphql::cache::create_cache();
+    let cache = graphql::cache::MemoryCache::new();
     //let trtr = vec!(String::from("asd"), String::from("hjk"), String::from("poi"));
     let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
 
@@ -216,14 +222,14 @@ fn test_cache_small() -> String {
         None => println!("000000000000000000"),
     };
 
-    let (read, expired, write) = cache.get_ops_count();
-    println!("read: {} - expired: {} - write {}", read, expired, write);
+    //let (read, expired, write) = cache.get_ops_count();
+    //println!("read: {} - expired: {} - write {}", read, expired, write);
 
     String::from("Ok")
 }
 
 fn test_cache() -> String {
-    let cache = graphql::cache::create_cache();
+    let cache = graphql::cache::MemoryCache::new();
     //let tttt = vec!(String::from("asd"), String::from("hjk"), String::from("poi"));
 
     let c = cache.clone();
@@ -401,10 +407,10 @@ fn test_cache() -> String {
     println!("double clean up completed");
 
     std::thread::sleep(Duration::from_secs(200));
-    let (read, expired, write) = cache.get_ops_count();
-    println!("read: {} - expired: {} - write {}", read, expired, write);
+    //let (read, expired, write) = cache.get_ops_count();
+    //println!("read: {} - expired: {} - write {}", read, expired, write);
 
-    {
+    /*{
         let thestore = cache.store();
         let ccc = thestore.read().unwrap();
         println!(
@@ -413,6 +419,7 @@ fn test_cache() -> String {
             ccc.keys().len()
         );
     }
+    */
     std::thread::sleep(Duration::from_secs(30));
 
     String::from("Ok")
@@ -489,7 +496,7 @@ fn test_deserializer() -> serde_json::Result<()> {
     let result: graphql_deserializer::GraphQLResponse = serde_json::from_str(data)?;
     //let mut hints = Vec::<(graphql_deserializer::CacheScope, u16, Value)>::new();
     let _ = std::collections::HashMap::<String, Value>::new();
-    let cache = graphql::cache::create_cache();
+    let cache = graphql::cache::MemoryCache::new();
 
     let (response_data, hints) = result.compress_cache_hints();
 
@@ -512,8 +519,9 @@ fn test_deserializer() -> serde_json::Result<()> {
     return Ok(());
 }
 
+/*
 async fn test_things() -> Result<(), graphql::parser::Error> {
-    let cache = graphql::cache::create_cache();
+    let cache = graphql::cache::MemoryCache::new();
     cache.insert(
         String::from("f1"),
         1000,
@@ -541,7 +549,7 @@ async fn test_things() -> Result<(), graphql::parser::Error> {
     let parsed_query = graphql::parser::parse_query(query)?;
 
     let fff = |d, v| send_request(d, v);
-    match graphql::cache::execute_operation(
+    match graphql::cache_handler::execute_operation(
         parsed_query.operations.into_iter().nth(0).unwrap(),
         parsed_query.fragment_definitions,
         Map::new(),
@@ -557,9 +565,11 @@ async fn test_things() -> Result<(), graphql::parser::Error> {
 
     Ok(())
 }
+*/
 
+/*
 async fn test_cache_update() -> Result<(), graphql::parser::Error> {
-    let cache = graphql::cache::create_cache();
+    let cache = graphql::cache::MemoryCache::new();
     let query1 = "{f1{f2 f3 a1: f4(id: 13) a2: f4(id: 11)}}";
     let query2 = "{f1{f2 f3 f4(id: 13) a2: f4(id: 11)}}";
     let query3 = "{f1{f2 f3 f4(id: 13)}}";
@@ -573,7 +583,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     let parsed_query4 = graphql::parser::parse_query(query4)?;
     let parsed_query5 = graphql::parser::parse_query(query5)?;
 
-    match graphql::cache::execute_operation(
+    match graphql::cache_handler::execute_operation(
         parsed_query.operations.into_iter().nth(0).unwrap(),
         parsed_query.fragment_definitions,
         Map::new(),
@@ -594,7 +604,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::execute_operation(
+    match graphql::cache_handler::execute_operation(
         parsed_query_clone.operations.into_iter().nth(0).unwrap(),
         parsed_query_clone.fragment_definitions,
         Map::new(),
@@ -615,7 +625,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::execute_operation(
+    match graphql::cache_handler::execute_operation(
         parsed_query2.operations.into_iter().nth(0).unwrap(),
         parsed_query2.fragment_definitions,
         Map::new(),
@@ -636,7 +646,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::execute_operation(
+    match graphql::cache_handler::execute_operation(
         parsed_query3.operations.into_iter().nth(0).unwrap(),
         parsed_query3.fragment_definitions,
         Map::new(),
@@ -657,7 +667,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::execute_operation(
+    match graphql::cache_handler::execute_operation(
         parsed_query4.operations.into_iter().nth(0).unwrap(),
         parsed_query4.fragment_definitions,
         Map::new(),
@@ -678,7 +688,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
     println!("=================================================");
     println!("=================================================");
 
-    match graphql::cache::execute_operation(
+    match graphql::cache_handler::execute_operation(
         parsed_query5.operations.into_iter().nth(0).unwrap(),
         parsed_query5.fragment_definitions,
         Map::new(),
@@ -694,6 +704,7 @@ async fn test_cache_update() -> Result<(), graphql::parser::Error> {
 
     Ok(())
 }
+*/
 
 /*
 
@@ -857,7 +868,7 @@ async fn stuff(
     addr_opt: Option<SocketAddr>,
     mut body: HashMap<String, Value>,
     auth_token: Option<String>,
-    cache: Arc<graphql::cache::cache::Cache<String, Value>>,
+    cache: RedisCache,
 ) -> Result<impl warp::Reply, Infallible> {
     //match auth_token {
     //    Some(token) => println!("Request from {}", token),
@@ -899,7 +910,7 @@ async fn stuff(
         )
     };
 
-    let result = match graphql::cache::execute_operation(
+    let result = match graphql::cache_handler::execute_operation(
         operation,
         fragment_definitions,
         variables,

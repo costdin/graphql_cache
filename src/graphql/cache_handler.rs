@@ -1,4 +1,4 @@
-pub mod cache;
+use super::cache::{MemoryCache, RedisCache};
 use crate::graphql::json::{extract_mut, merge_json};
 use crate::graphql::parser::{
     expand_operation, Document, Error, Field, FragmentDefinition, Operation, OperationType,
@@ -12,8 +12,15 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
-pub fn create_cache() -> Arc<cache::Cache<String, Value>> {
-    cache::Cache::new()
+pub fn create_cache() -> MemoryCache {
+    MemoryCache::new()
+}
+
+pub fn create_redis_cache() -> RedisCache {
+    match RedisCache::new("redis://192.168.1.186") {
+        Ok(c) => c,
+        _ => panic!("aaaaaaaaaaaaaaaa")
+    }
 }
 
 /// Executes an operation against the cache.
@@ -22,7 +29,7 @@ pub async fn execute_operation<'a, F, Fut>(
     operation: Operation<'a>,
     fragment_definitions: Vec<FragmentDefinition<'a>>,
     variables: Map<String, Value>,
-    cache: Arc<cache::Cache<String, Value>>,
+    cache: RedisCache,
     user_id: Option<String>,
     get_fn: F,
 ) -> Result<Value, Error>
@@ -75,7 +82,7 @@ where
         let result: GraphQLResponse = from_value(response?)?;
         let (mut response_data, hints) = result.compress_cache_hints();
 
-        update_cache(&cache, &user_id, hints, &op, &var);
+        update_cache(cache, &user_id, hints, &op, &var);
         merge_json(&mut response_data, data_from_cache);
 
         Ok(json!({ "data": response_data }))
@@ -85,7 +92,7 @@ where
 }
 
 fn update_cache<'a>(
-    cache: &cache::Cache<String, Value>,
+    cache: RedisCache,
     user_id: &Option<String>,
     cache_hints: Vec<(Value, CacheHint)>,
     query: &Operation<'a>,
@@ -197,7 +204,7 @@ fn match_field_with_cache<'a>(
     field: Field<'a>,
     variables: &Map<String, Value>,
     user_id: &Option<String>,
-    cache: &cache::Cache<String, Value>,
+    cache: &RedisCache,
 ) -> (Option<Field<'a>>, Option<Value>) {
     let cached_value = get_cached_item(&field_to_cache_key(&field, variables), user_id, cache);
     match_field_with_cache_recursive(
@@ -216,7 +223,7 @@ fn match_field_with_cache_recursive<'a>(
     variables: &Map<String, Value>,
     user_id: &Option<String>,
     cached_value: Option<Value>,
-    cache: &cache::Cache<String, Value>,
+    cache: &RedisCache,
 ) -> (Option<Field<'a>>, Option<Value>) {
     if field.is_leaf() {
         return match cached_value {
@@ -371,7 +378,7 @@ fn fields_to_cache_key<'a>(fields: &[&Field<'a>], variables: &Map<String, Value>
 fn get_cached_item<'a>(
     cache_key: &String,
     user_id: &Option<String>,
-    cache: &cache::Cache<String, Value>,
+    cache: &RedisCache,
 ) -> Option<Value> {
     let public_cache = cache.get(&cache_key);
     let private_cache = match user_id {
@@ -391,7 +398,7 @@ fn get_cached_item<'a>(
 
     let mut cached_value = json!({});
     for x in cached_fields.into_iter() {
-        merge_json(&mut cached_value, (*x).clone())
+        merge_json(&mut cached_value, x)
     }
 
     Some(cached_value)
@@ -430,10 +437,10 @@ fn extract_fields_with_parameters_recursive<'a>(
     stack.pop();
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graphql::cache::create_cache;
     use crate::graphql::parser::*;
     use serde_json::json;
     use serde_json::value::Value;
@@ -831,3 +838,4 @@ mod tests {
         (result, document, variables)
     }
 }
+*/

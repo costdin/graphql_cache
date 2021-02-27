@@ -376,7 +376,7 @@ where
             let variables = parse_variables(tokens, parser_state)?;
 
             (tokens.next(), None, variables)
-        },
+        }
         Some(s) => return Err(Error::new(format!("invalid token {}", s))),
         None => return Err(Error::new(String::from("Unexpected end of string"))),
     };
