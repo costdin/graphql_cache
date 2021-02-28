@@ -70,9 +70,9 @@ async fn main() {
     };
     */
     
-    let cache = match graphql::cache::RedisCache::new("redis://u0:pass@192.168.1.186") {
+    let cache = match graphql::cache::RedisCache::new("redis://u0:pass@192.168.1.186").await {
         Ok(c) => c,
-        _ => return
+        _ => return,
     };
 
     //    let auth_token = warp::cookie::optional("auth_token");

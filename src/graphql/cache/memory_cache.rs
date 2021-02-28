@@ -18,10 +18,10 @@ pub struct MemoryCache {
 impl MemoryCache {
     pub fn new() -> MemoryCache {
         MemoryCache {
-            inner_cache: InnerCache::new()
+            inner_cache: InnerCache::new(),
         }
     }
-    
+
     pub fn insert(&self, key: String, duration_seconds: u16, value: Value) {
         self.inner_cache.insert(key, duration_seconds, value);
     }
@@ -32,9 +32,7 @@ impl MemoryCache {
         match r {
             None => None,
             Some(v) => {
-                let res = v.into_iter()
-                           .map(|v| (*v).clone())
-                           .collect::<Vec<Value>>();
+                let res = v.into_iter().map(|v| (*v).clone()).collect::<Vec<Value>>();
 
                 Some(res)
             }
@@ -45,7 +43,7 @@ impl MemoryCache {
 impl Clone for MemoryCache {
     fn clone(&self) -> Self {
         MemoryCache {
-            inner_cache: self.inner_cache.clone()
+            inner_cache: self.inner_cache.clone(),
         }
     }
 }

@@ -16,10 +16,10 @@ pub fn create_cache() -> MemoryCache {
     MemoryCache::new()
 }
 
-pub fn create_redis_cache() -> RedisCache {
-    match RedisCache::new("redis://192.168.1.186") {
+pub async fn create_redis_cache() -> RedisCache {
+    match RedisCache::new("redis://192.168.1.186").await {
         Ok(c) => c,
-        _ => panic!("aaaaaaaaaaaaaaaa")
+        _ => panic!("aaaaaaaaaaaaaaaa"),
     }
 }
 
@@ -53,7 +53,7 @@ where
     for field in expanded_operation.fields {
         let alias = String::from(field.get_alias());
         let (residual_field, cached_field) =
-            match_field_with_cache(field, &variables, &user_id, &cache);
+            match_field_with_cache(field, &variables, &user_id, &cache).await;
 
         match residual_field {
             Some(f) => residual_fields.push(f),
@@ -82,7 +82,7 @@ where
         let result: GraphQLResponse = from_value(response?)?;
         let (mut response_data, hints) = result.compress_cache_hints();
 
-        update_cache(cache, &user_id, hints, &op, &var);
+        update_cache(cache, &user_id, hints, &op, &var).await;
         merge_json(&mut response_data, data_from_cache);
 
         Ok(json!({ "data": response_data }))
@@ -91,7 +91,7 @@ where
     }
 }
 
-fn update_cache<'a>(
+async fn update_cache<'a>(
     cache: RedisCache,
     user_id: &Option<String>,
     cache_hints: Vec<(Value, CacheHint)>,
@@ -109,7 +109,7 @@ fn update_cache<'a>(
                     (CacheScope::PRIVATE, None) => continue,
                 };
 
-                cache.insert(cache_key, hint.max_age, cache_value);
+                cache.insert(cache_key, hint.max_age, cache_value).await;
             }
         }
     }
@@ -200,21 +200,52 @@ fn dealias_field(json_value: &mut Value, current_field: &Field) {
     }
 }
 
-fn match_field_with_cache<'a>(
+fn cacheable_fields<'a>(field: &'a Field<'a>) -> Vec<Vec<&'a Field<'a>>> {
+    let mut stack = vec![field];
+    let mut result = vec![stack.clone()];
+
+    for subfield in field.get_subfields().into_iter() {
+        cacheable_fields_int(subfield, &mut stack, &mut result);
+    }
+
+    result
+}
+
+fn cacheable_fields_int<'a>(
+    field: &'a Field<'a>,
+    stack: &mut Vec<&'a Field<'a>>,
+    result: &mut Vec<Vec<&'a Field<'a>>>,
+) {
+    stack.push(field);
+    if field.has_parameters() {
+        result.push(stack.clone());
+    }
+
+    for subfield in field.get_subfields().into_iter() {
+        cacheable_fields_int(subfield, stack, result);
+    }
+
+    stack.pop();
+}
+
+async fn match_field_with_cache<'a>(
     field: Field<'a>,
     variables: &Map<String, Value>,
     user_id: &Option<String>,
     cache: &RedisCache,
 ) -> (Option<Field<'a>>, Option<Value>) {
-    let cached_value = get_cached_item(&field_to_cache_key(&field, variables), user_id, cache);
-    match_field_with_cache_recursive(
-        &mut Vec::new(),
-        field,
-        variables,
-        user_id,
-        cached_value,
-        cache,
-    )
+    let mut cached_value = json!({});
+    for cf in cacheable_fields(&field) {
+        match get_cached_item(&fields_to_cache_key(&cf, &variables), &user_id, &cache).await {
+            Some(x) => merge_json(&mut cached_value, x),
+            None => {}
+        };
+    }
+
+    let cached_value =
+        get_cached_item(&field_to_cache_key(&field, &variables), &user_id, &cache).await;
+
+    match_field_with_cache_recursive(&mut Vec::new(), field, &variables, &user_id, cached_value)
 }
 
 fn match_field_with_cache_recursive<'a>(
@@ -223,7 +254,6 @@ fn match_field_with_cache_recursive<'a>(
     variables: &Map<String, Value>,
     user_id: &Option<String>,
     cached_value: Option<Value>,
-    cache: &RedisCache,
 ) -> (Option<Field<'a>>, Option<Value>) {
     if field.is_leaf() {
         return match cached_value {
@@ -270,30 +300,18 @@ fn match_field_with_cache_recursive<'a>(
         let subfield_name = subfield.get_name();
         let subfield_alias = String::from(subfield.get_alias());
 
-        // If a subfield has parameters, then get it from the cache
-        // else if a subfield is unique, then extract the cache value from the cache object
+        // If a subfield is unique, then extract the cache value from the cache object
         // else clone the cache value (so it can be used by the next duplicate)
-        let field_from_cache = if subfield.has_parameters() {
-            let key = concatenate_cache_keys(stack, &subfield, variables);
-            get_cached_item(&key, user_id, cache)
-        } else {
-            match subfield_map.get_mut(subfield.get_name()) {
-                Some(v) if v > &mut 1 => {
-                    *v -= 1;
-                    Some(cache_map[subfield_name].clone())
-                }
-                _ => cache_map.remove(subfield_name),
+        let field_from_cache = match subfield_map.get_mut(subfield.get_name()) {
+            Some(v) if v > &mut 1 => {
+                *v -= 1;
+                Some(cache_map[subfield_name].clone())
             }
+            _ => cache_map.remove(subfield_name),
         };
 
-        let (residual_subfield, from_cache) = match_field_with_cache_recursive(
-            stack,
-            subfield,
-            variables,
-            user_id,
-            field_from_cache,
-            cache,
-        );
+        let (residual_subfield, from_cache) =
+            match_field_with_cache_recursive(stack, subfield, variables, user_id, field_from_cache);
 
         match residual_subfield {
             Some(f) => residual_subfields.push(f),
@@ -375,14 +393,14 @@ fn fields_to_cache_key<'a>(fields: &[&Field<'a>], variables: &Map<String, Value>
         .join("+")
 }
 
-fn get_cached_item<'a>(
+async fn get_cached_item<'a>(
     cache_key: &String,
     user_id: &Option<String>,
     cache: &RedisCache,
 ) -> Option<Value> {
-    let public_cache = cache.get(&cache_key);
+    let public_cache = cache.get(&cache_key).await;
     let private_cache = match user_id {
-        Some(uid) => cache.get(&to_private_cache_key(uid, cache_key)),
+        Some(uid) => cache.get(&to_private_cache_key(uid, cache_key)).await,
         None => None,
     };
 

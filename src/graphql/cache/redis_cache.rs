@@ -1,50 +1,35 @@
-extern crate r2d2_redis;
-
-use std::ops::DerefMut;
-use r2d2::Pool;
-use r2d2_redis::{r2d2, redis, RedisConnectionManager};
-use r2d2_redis::redis::{Commands, RedisError, FromRedisValue, RedisResult, ToRedisArgs};
-//use super::cache::Cache;
-use chrono::{Duration, Utc, DateTime};
-//use redis::{RedisError, FromRedisValue, RedisResult, ToRedisArgs};
-use serde_json::{json, Value, to_string, from_str};
-use std::cmp::Ordering;
-use std::sync::Arc;
+use ::redis::aio::MultiplexedConnection;
+use chrono::Utc;
+use redis::AsyncCommands;
+use redis::{RedisError, RedisResult};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value};
 use std::convert::TryInto;
-use serde::{Serialize, Deserialize};
-//use redis::AsyncCommands;
-//use redis::aio::Connection;
-/*use redis::Commands;
-use redis::Connection;
-use redis::Client;
-*/
+
 pub struct RedisCache {
-    inner_cache: InternalRedisCache
+    inner_cache: InternalRedisCache,
 }
 
 impl RedisCache {
-    pub fn new(url: &str) -> Result<RedisCache, RedisCacheError> {
-        let manager = RedisConnectionManager::new(url).unwrap();
-        let pool = r2d2::Pool::builder()
-            .build(manager)
-            .unwrap();
+    pub async fn new(url: &str) -> Result<RedisCache, RedisCacheError> {
+        let client = redis::Client::open(url)?;
+        let connection = client.get_multiplexed_async_connection().await?;
 
-        //let client = redis::Client::open(url)?; //"redis://127.0.0.1/")?;
         let inner_cache = InternalRedisCache {
-            connection_pool: pool.clone()
+            connection: connection,
         };
 
-        Ok(RedisCache { inner_cache: inner_cache })
+        Ok(RedisCache {
+            inner_cache: inner_cache,
+        })
     }
 
-
-    pub fn insert(&self, key: String, duration_seconds: u16, value: Value) {
-        self.inner_cache.insert(key, duration_seconds, value);
+    pub async fn insert(&self, key: String, duration_seconds: u16, value: Value) {
+        self.inner_cache.insert(key, duration_seconds, value).await;
     }
 
-    pub fn get(&self, key: &String) -> Option<Vec<Value>> {
-
-        match self.inner_cache.get(key) {
+    pub async fn get(&self, key: &String) -> Option<Vec<Value>> {
+        match self.inner_cache.get(key).await {
             Ok(r) => match r {
                 None => None,
                 Some(v) => {
@@ -55,7 +40,7 @@ impl RedisCache {
                     Some(v)
                 }
             },
-            _ => None
+            _ => None,
         }
     }
 }
@@ -63,57 +48,26 @@ impl RedisCache {
 impl Clone for RedisCache {
     fn clone(&self) -> RedisCache {
         RedisCache {
-            inner_cache: InternalRedisCache { 
-                connection_pool: self.inner_cache.connection_pool.clone()
-            }
+            inner_cache: InternalRedisCache {
+                connection: self.inner_cache.connection.clone(),
+            },
         }
     }
 }
 
 struct InternalRedisCache {
-    pub connection_pool: Pool<RedisConnectionManager>,
+    pub connection: MultiplexedConnection,
 }
 
 #[derive(Serialize, Deserialize)]
 struct InternalCacheItem {
     pub expiry_date_utc: u64,
-    pub value: Value
+    pub value: Value,
 }
 
-/*
-impl ToRedisArgs for InternalCacheItem {
-    fn write_redis_args<W>(&self, out: &mut W)
-    where
-        W: ?Sized + RedisWrite,
-    {
-
-    }
-}
-
-impl FromRedisValue for InternalCacheItem {
-    fn from_redis_value(v: &Value) -> RedisResult<InternalCacheItem> {
-        match *v {
-            Value::Object(map) => {
-                let expiry : u64 = match map["expiry_date_utc"] {
-                    Value::Number(n) => n.as_u64().unwrap_or(0),
-                    _ => 0
-                };
-
-                Ok(InternalCacheItem{
-                    expiry_date_utc: expiry,
-                    value: map["value"]
-                })
-            },
-            _ => Ok(InternalCacheItem {
-                expiry_date_utc: 0,
-                value: Value::Null
-            }),
-        }
-    }
-}*/
 
 pub enum RedisCacheError {
-    CreateError
+    CreateError,
 }
 
 impl From<RedisError> for RedisCacheError {
@@ -123,79 +77,49 @@ impl From<RedisError> for RedisCacheError {
 }
 
 impl InternalRedisCache {
-    fn insert(&self, key: String, duration_seconds: u16, value: Value) -> Result<(), RedisCacheError> {
+    async fn insert(
+        &self,
+        key: String,
+        duration_seconds: u16,
+        value: Value,
+    ) -> Result<(), RedisCacheError> {
         if value == Value::default() {
             return Ok(());
         }
-        
+
+        if let Value::Object(map) = &value {
+            if map.len() == 0 {
+                return Ok(());
+            }
+        }
+
         let now: u64 = Utc::now().timestamp().try_into().unwrap();
         let offset: u64 = duration_seconds.try_into().unwrap();
 
         let item = InternalCacheItem {
             expiry_date_utc: now + offset,
-            value: value
+            value: value,
         };
         let json = serde_json::to_string(&item).unwrap();
 
-        let mut conn = match self.connection_pool.get() {
-            Ok(c) => c,
-            Err(e) => { println!("{}", e); return Ok(()); }
-        };
-
-        //let res: RedisResult<redis::Value> = redis::pipe()
-        //    .cmd("AUTH").arg("pass")
-        //    .cmd("LPUSH").arg(key).arg(json)
-        //    .query(conn.deref_mut());
-        //redis::cmd("AUTH").arg("pass").execute(&mut conn);
-
-        let res: RedisResult<redis::Value> = conn.lpush(key, json);
+        let res: RedisResult<redis::Value> = self.connection.clone().lpush(key, json).await;
 
         match res {
-            Ok(r) => { },
-            Err(e) => println!("{}", e)
+            Ok(r) => {}
+            Err(e) => println!("{}", e),
         };
 
         Ok(())
     }
 
-    /*
-    fn insert(&self, key: String, duration_seconds: u16, value: Value) -> Result<(), RedisCacheError> {
-        let now: u64 = Utc::now().timestamp().try_into().unwrap();
-        let offset: u64 = duration_seconds.try_into().unwrap();
-
-        let item = InternalCacheItem {
-            expiry_date_utc: now + offset,
-            value: value
-        };
-        let json = serde_json::to_string(&item).unwrap();
-
-        let conn = self.client.get_connection();
-        let mut c = match conn {
-            Ok(c) => c,
-            Err(e) => { println!("{:#?}", e); return Err(RedisCacheError::CreateError); }
-        };
-
-        let res = c.lpush(key, json);
-        
-        match res {
-            Ok(_) => (),
-            Err(e) => println!("{:#?}", e)
-        };
-
-        Ok(())
-    }*/
-
-    fn get(&self, key: &String) -> Result<Option<Vec<Value>>, RedisCacheError>{
+    async fn get(&self, key: &String) -> Result<Option<Vec<Value>>, RedisCacheError> {
         let now = Utc::now().timestamp().try_into().unwrap();
-        let mut conn = self.connection_pool.get().unwrap();
 
-        //let vec: Vec<String> = redis::pipe()
-        //    .cmd("AUTH").arg("pass")
-        //    .cmd("LRANGE").arg(key).arg(0).arg(1)
-        //    .query(connection.deref_mut())?;
-
-        let vec: Vec<String> = conn.lrange(key, 0, -1)?;
-        let dvec = vec.iter().map(|e| serde_json::from_str(e).unwrap()).collect::<Vec<InternalCacheItem>>();
+        let vec: Vec<String> = self.connection.clone().lrange(key, 0, -1).await?;
+        let dvec = vec
+            .iter()
+            .map(|e| serde_json::from_str(e).unwrap())
+            .collect::<Vec<InternalCacheItem>>();
 
         let mut remove_ix = Vec::new();
         let mut vcccc = Vec::new();
@@ -208,7 +132,7 @@ impl InternalRedisCache {
         }
 
         if vcccc.len() == 0 {
-            conn.del(key)?;
+            self.connection.clone().del(key).await?;
             Ok(None)
         } else {
             if remove_ix.len() > 0 {
@@ -220,12 +144,10 @@ impl InternalRedisCache {
                 }
                 p.cmd("LREM").arg(key).arg(0).arg("{}");
 
-                p.query(conn.deref_mut())?;
+                p.query_async(&mut self.connection.clone()).await?;
             }
 
-            let res = vcccc.into_iter()
-                .map(|item| item.value)
-                .collect::<Vec<_>>();
+            let res = vcccc.into_iter().map(|item| item.value).collect::<Vec<_>>();
 
             Ok(Some(res))
         }
