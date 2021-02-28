@@ -3,12 +3,14 @@ use chrono::Utc;
 use redis::AsyncCommands;
 use redis::{RedisError, RedisResult};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value};
+use serde_json::Value;
 use std::convert::TryInto;
 
 pub struct RedisCache {
     inner_cache: InternalRedisCache,
 }
+
+const MAX_REDIS_NUMBER: u64 = 9007199254740992;
 
 impl RedisCache {
     pub async fn new(url: &str) -> Result<RedisCache, RedisCacheError> {
@@ -32,13 +34,7 @@ impl RedisCache {
         match self.inner_cache.get(key).await {
             Ok(r) => match r {
                 None => None,
-                Some(v) => {
-                    /*let res = v.into_iter()
-                               .map(|v| *v.clone())
-                               .collect::<Vec<_>>();
-                    */
-                    Some(v)
-                }
+                s @ Some(_) => s,
             },
             _ => None,
         }
@@ -64,7 +60,6 @@ struct InternalCacheItem {
     pub expiry_date_utc: u64,
     pub value: Value,
 }
-
 
 pub enum RedisCacheError {
     CreateError,
@@ -93,19 +88,15 @@ impl InternalRedisCache {
             }
         }
 
-        let now: u64 = Utc::now().timestamp().try_into().unwrap();
-        let offset: u64 = duration_seconds.try_into().unwrap();
+        let now: isize = Utc::now().timestamp().try_into().unwrap();
+        let offset: isize = duration_seconds.try_into().unwrap();
+        let score = now + offset;
+        let json = serde_json::to_string(&value).unwrap();
 
-        let item = InternalCacheItem {
-            expiry_date_utc: now + offset,
-            value: value,
-        };
-        let json = serde_json::to_string(&item).unwrap();
-
-        let res: RedisResult<redis::Value> = self.connection.clone().lpush(key, json).await;
+        let res: RedisResult<redis::Value> = self.connection.clone().zadd(key, json, score).await;
 
         match res {
-            Ok(r) => {}
+            Ok(_) => {}
             Err(e) => println!("{}", e),
         };
 
@@ -113,43 +104,21 @@ impl InternalRedisCache {
     }
 
     async fn get(&self, key: &String) -> Result<Option<Vec<Value>>, RedisCacheError> {
-        let now = Utc::now().timestamp().try_into().unwrap();
+        let now: isize = Utc::now().timestamp().try_into().unwrap();
+        let (del_result, get_result): (redis::Value, Vec<String>) = redis::pipe()
+            .zrembyscore(key, 0isize, now)
+            .zrangebyscore(key, now, "+inf")
+            .query_async(&mut self.connection.clone())
+            .await?;
 
-        let vec: Vec<String> = self.connection.clone().lrange(key, 0, -1).await?;
-        let dvec = vec
-            .iter()
-            .map(|e| serde_json::from_str(e).unwrap())
-            .collect::<Vec<InternalCacheItem>>();
-
-        let mut remove_ix = Vec::new();
-        let mut vcccc = Vec::new();
-        for (ix, item) in dvec.into_iter().enumerate() {
-            if item.expiry_date_utc > now {
-                vcccc.push(item);
-            } else {
-                remove_ix.push(ix);
-            }
-        }
-
-        if vcccc.len() == 0 {
-            self.connection.clone().del(key).await?;
-            Ok(None)
+        if get_result.len() > 0 {
+            let result = get_result
+                .iter()
+                .map(|s| serde_json::from_str(s).unwrap())
+                .collect::<Vec<Value>>();
+            Ok(Some(result))
         } else {
-            if remove_ix.len() > 0 {
-                let mut p = redis::pipe();
-                p.cmd("AUTH").arg("pass");
-
-                for ix in remove_ix {
-                    p.cmd("LSET").arg(key).arg(ix).arg("{}");
-                }
-                p.cmd("LREM").arg(key).arg(0).arg("{}");
-
-                p.query_async(&mut self.connection.clone()).await?;
-            }
-
-            let res = vcccc.into_iter().map(|item| item.value).collect::<Vec<_>>();
-
-            Ok(Some(res))
+            Ok(None)
         }
     }
 }
