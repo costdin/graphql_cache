@@ -241,11 +241,8 @@ async fn match_field_with_cache<'a>(
             None => {}
         };
     }
-
-    let cached_value =
-        get_cached_item(&field_to_cache_key(&field, &variables), &user_id, &cache).await;
-
-    match_field_with_cache_recursive(&mut Vec::new(), field, &variables, &user_id, cached_value)
+    
+    match_field_with_cache_recursive(&mut Vec::new(), field, &variables, &user_id, Some(cached_value))
 }
 
 fn match_field_with_cache_recursive<'a>(
