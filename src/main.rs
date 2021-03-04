@@ -1,19 +1,18 @@
 mod graphql;
 mod graphql_deserializer;
 
-use graphql::cache::{MemoryCache, RedisCache};
-use graphql::parser::{parse_query, serialize_document, serialize_operation};
+use futures::executor::block_on;
+use graphql::cache::Cache;
+use graphql::parser::serialize_operation;
 use graphql_deserializer::CacheScope;
-use rand::Rng;
 use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 use tokio::time::sleep;
 use warp::Filter;
 
@@ -70,10 +69,13 @@ async fn main() {
     };
     */
     
-    let cache = match graphql::cache::RedisCache::new("redis://u0:pass@192.168.1.186").await {
+    #[cfg(not(test))]
+    let cache = match Cache::new("redis://u0:pass@192.168.1.186").await {
         Ok(c) => c,
         _ => return,
     };
+    #[cfg(test)]
+    let cache = Cache::new();
 
     //    let auth_token = warp::cookie::optional("auth_token");
     let auth_token = warp::header::optional("x-auth");
@@ -209,15 +211,15 @@ fn test_cache_cleanup() -> String {
 }
 */
 
-fn test_cache_small() -> String {
+async fn test_cache_small() -> String {
     let cache = graphql::cache::MemoryCache::new();
     //let trtr = vec!(String::from("asd"), String::from("hjk"), String::from("poi"));
     let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
 
-    cache.insert(format!("1aaaddccc{}", 0), 10000, json.clone());
-    cache.insert(format!("1aaa{}{}", 1, 0), 10000, json.clone());
+    block_on(cache.insert(format!("1aaaddccc{}", 0), 10000, json.clone()));
+    block_on(cache.insert(format!("1aaa{}{}", 1, 0), 10000, json.clone()));
 
-    match cache.get(&format!("1aaa{}{}", 1, 0)) {
+    match cache.get(&format!("1aaa{}{}", 1, 0)).await {
         Some(_) => {}
         None => println!("000000000000000000"),
     };
@@ -228,7 +230,7 @@ fn test_cache_small() -> String {
     String::from("Ok")
 }
 
-fn test_cache() -> String {
+async fn test_cache() -> String {
     let cache = graphql::cache::MemoryCache::new();
     //let tttt = vec!(String::from("asd"), String::from("hjk"), String::from("poi"));
 
@@ -241,14 +243,14 @@ fn test_cache() -> String {
     let vd: Value = serde_json::from_str(r#"{"a": 5555}"#).unwrap();
 
     let start = SystemTime::now();
-    cache.insert(String::from("adsasd0"), 010, vc.clone());
-    cache.insert(String::from("adsasd1"), 123, vd.clone());
-    cache.insert(String::from("adsasd2"), 123, vd.clone());
-    cache.insert(String::from("adsasd3"), 123, vd.clone());
-    cache.insert(String::from("adsasd4"), 123, vd.clone());
-    cache.insert(String::from("adsasd5"), 123, vd.clone());
-    cache.insert(String::from("adsasd6"), 123, vd.clone());
-    cache.insert(String::from("adsasd7"), 123, vd.clone());
+    block_on(cache.insert(String::from("adsasd0"), 010, vc.clone()));
+    block_on(cache.insert(String::from("adsasd1"), 123, vd.clone()));
+    block_on(cache.insert(String::from("adsasd2"), 123, vd.clone()));
+    block_on(cache.insert(String::from("adsasd3"), 123, vd.clone()));
+    block_on(cache.insert(String::from("adsasd4"), 123, vd.clone()));
+    block_on(cache.insert(String::from("adsasd5"), 123, vd.clone()));
+    block_on(cache.insert(String::from("adsasd6"), 123, vd.clone()));
+    block_on(cache.insert(String::from("adsasd7"), 123, vd.clone()));
 
     println!("{{ \"v\": 11 }}");
 
@@ -259,13 +261,13 @@ fn test_cache() -> String {
             //let trtr = vec!(String::from("asd"), String::from("hjk"), String::from("poi"));
             let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
 
-            for x in 0..10000 {
+            for x in 0i32..10000 {
                 let c = if i % 2 == 0 { 10000 - x } else { x };
 
-                fff.insert(format!("1aaaddccc{}", c), 1, json.clone());
-                fff.insert(format!("1aaa{}{}", i, c), 100, json.clone());
+                block_on(fff.insert(format!("1aaaddccc{}", c), 1, json.clone()));
+                block_on(fff.insert(format!("1aaa{}{}", i, c), 100, json.clone()));
 
-                match fff.get(&format!("1aaa{}{}", i, c)) {
+                match block_on(fff.get(&format!("1aaa{}{}", i, c))) {
                     Some(_) => {}
                     None => println!("000000000000000000"),
                 };
@@ -281,7 +283,7 @@ fn test_cache() -> String {
 
         for x in 0..10000 {
             let daaaa = json.clone();
-            c.insert(format!("aaa{}", x), 1, daaaa);
+            block_on(c.insert(format!("aaa{}", x), 1, daaaa));
         }
     });
 
@@ -291,11 +293,11 @@ fn test_cache() -> String {
 
         for x in 0..12000 {
             let daaaa = json.clone();
-            d.insert(format!("aaa{}", x), 1, daaaa);
+            block_on(d.insert(format!("aaa{}", x), 1, daaaa));
         }
     });
 
-    match cache.get(&String::from("adsasd0")) {
+    match cache.get(&String::from("adsasd0")).await {
         Some(vec) => {
             let value = &vec[0];
             if value.to_string() != vc.to_string() {
@@ -310,7 +312,7 @@ fn test_cache() -> String {
     }
 
     std::thread::sleep(Duration::from_secs(60));
-    match cache.get(&String::from("adsasd0")) {
+    match cache.get(&String::from("adsasd0")).await {
         Some(_) => return String::from("NOOOOOOOOOOOOOOOOO"),
         None => {}
     }
@@ -329,10 +331,10 @@ fn test_cache() -> String {
             String::from("poi"),
         ];
 
-        for x in 0..6000 {
+        for x in 0i32..6000 {
             let key = format!("aaa{}", x);
 
-            match e.get(&key) {
+            match block_on(e.get(&key)) {
                 None => {}
                 _ => println!("GAAAAAAAAAAAAAAAAAAAA1"),
             }
@@ -345,10 +347,10 @@ fn test_cache() -> String {
             String::from("poi"),
         ];
 
-        for x in 6000..12000 {
+        for x in 6000i32..12000 {
             let key = format!("aaa{}", x);
 
-            match f.get(&key) {
+            match block_on(f.get(&key)) {
                 None => {}
                 _ => println!("GAAAAAAAAAAAAAAAAAAAA2"),
             }
@@ -366,7 +368,7 @@ fn test_cache() -> String {
     println!("silly threads completed");
     std::thread::sleep(Duration::from_secs(5));
 
-    for i in 0..1000 {
+    for i in 0i32..1000 {
         let fff = cache.clone();
         let _ = vec![
             String::from("asd"),
@@ -374,10 +376,10 @@ fn test_cache() -> String {
             String::from("poi"),
         ];
 
-        for x in 0..10000 {
+        for x in 0i32..10000 {
             let c = if i % 2 == 0 { 10000 - x } else { x };
 
-            match fff.get(&format!("1aaaddccc{}", c)) {
+            match fff.get(&format!("1aaaddccc{}", c)).await {
                 Some(_) => println!("NANANAANANANANANANANAANAN"),
                 None => {}
             };
@@ -398,7 +400,7 @@ fn test_cache() -> String {
         for x in 0..10000 {
             let c = if i % 2 == 0 { 10000 - x } else { x };
 
-            match fff.get(&format!("1aaaddccc{}", c)) {
+            match fff.get(&format!("1aaaddccc{}", c)).await {
                 Some(_) => println!("NANANAANANANANANANANAANAN"),
                 None => {}
             };
@@ -511,7 +513,7 @@ fn test_deserializer() -> serde_json::Result<()> {
                 println!("{:#?}", hint);
                 println!("{:#?}", value);
 
-                cache.insert(field_name.clone(), duration, value);
+                block_on(cache.insert(field_name.clone(), duration, value));
             }
             _ => {}
         }
@@ -868,7 +870,7 @@ async fn stuff(
     addr_opt: Option<SocketAddr>,
     mut body: HashMap<String, Value>,
     auth_token: Option<String>,
-    cache: RedisCache,
+    cache: Cache,
 ) -> Result<impl warp::Reply, Infallible> {
     //match auth_token {
     //    Some(token) => println!("Request from {}", token),

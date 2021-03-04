@@ -1,5 +1,5 @@
-use super::cache::{Cache, MemoryCache, RedisCache};
-use crate::graphql::json::{extract_mut, merge_json};
+use super::cache::{Cache};
+use crate::graphql::json::{extract_mut, extract_mut_ren, merge_json};
 use crate::graphql::parser::{
     expand_operation, Error, Field, FragmentDefinition, Operation, OperationType, Parameter,
     ParameterValue, Traversable,
@@ -117,14 +117,14 @@ fn get_cache_values<'a>(
 
     // reverse collection so that fields closest to the root
     // are processed last
-    cacheable_fields.sort_by(|path1, path2| path2.len().cmp(&path1.len()));
+    cacheable_fields.sort_by(|(_, path1), (_, path2)| path2.len().cmp(&path1.len()));
 
     cacheable_fields
         .into_iter()
-        .map(|fields| {
+        .map(|(from_param, fields)| {
             (
                 fields_to_cache_key(&fields, variables),
-                extract_mut(&mut value, &fields_to_json_path(&fields)),
+                if from_param { extract_mut_ren(&mut value, &fields_to_json_path(&fields), &field_to_cache_key(fields.iter().last().unwrap(), &variables)) } else { extract_mut(&mut value, &fields_to_json_path(&fields)) },
                 fields,
             )
         })
@@ -223,6 +223,7 @@ async fn match_field_with_cache<'a>(
     cache: &Cache,
 ) -> (Option<Field<'a>>, Option<Value>) {
     let mut cached_value = json!({});
+
     for cf in cacheable_fields(&field) {
         match get_cached_item(&fields_to_cache_key(&cf, &variables), &user_id, &cache).await {
             Some(x) => merge_json(&mut cached_value, x),
@@ -288,12 +289,18 @@ fn match_field_with_cache_recursive<'a>(
     let mut value_from_cache = Map::new();
     let mut residual_subfields = Vec::<Field>::new();
     for subfield in subfields {
-        let subfield_name = subfield.get_name();
+        let temp_subf: String;
+        let subfield_name = if subfield.has_parameters() {
+            temp_subf = field_to_cache_key(&subfield, &variables);
+            &temp_subf
+        } else {
+            subfield.get_name()
+        };        
         let subfield_alias = String::from(subfield.get_alias());
 
         // If a subfield is unique, then extract the cache value from the cache object
         // else clone the cache value (so it can be used by the next duplicate)
-        let field_from_cache = match subfield_map.get_mut(subfield.get_name()) {
+        let field_from_cache = match subfield_map.get_mut(subfield_name) {
             Some(v) if v > &mut 1 => {
                 *v -= 1;
                 Some(cache_map[subfield_name].clone())
@@ -360,7 +367,16 @@ fn append_parameter_to_cache_key<'a>(
     match &parameter.value {
         ParameterValue::Nil => result + "NIL",
         ParameterValue::Scalar(s) => result + s,
-        ParameterValue::Variable(v) => result + &format!("VAR{:?}", variables[*v]),
+        ParameterValue::Variable(v) => {
+            match &variables[*v] {
+                Value::Bool(b) => result + &format!("{}", b),
+                Value::Number(n) => result + &format!("{}", n),
+                Value::String(s) => result + &format!("\"{}\"", s),
+                Value::Object(o) => result + &format!("OBJ{:?}", o),
+                Value::Array(o) => result + &format!("LST{:?}", o),
+                Value::Null => result + "NIL",
+            }            
+        },
         ParameterValue::Object(obj) => result + &format!("OBJ{:?}", obj),
         ParameterValue::List(lst) => result + &format!("LST{:?}", lst),
     }
@@ -406,7 +422,7 @@ async fn get_cached_item<'a>(
 fn get_cacheable_fields<'a>(
     field: &'a Field<'a>,
     mut initial_path: Vec<&'a Field<'a>>,
-) -> Vec<Vec<&'a Field<'a>>> {
+) -> Vec<(bool, Vec<&'a Field<'a>>)> {
     let mut cachable_fields = Vec::new();
 
     extract_fields_with_parameters_recursive(field, &mut initial_path, &mut cachable_fields);
@@ -417,16 +433,16 @@ fn get_cacheable_fields<'a>(
 fn extract_fields_with_parameters_recursive<'a>(
     field: &'a Field<'a>,
     stack: &mut Vec<&'a Field<'a>>,
-    accumulator: &mut Vec<Vec<&'a Field<'a>>>,
+    accumulator: &mut Vec<(bool, Vec<&'a Field<'a>>)>,
 ) {
     stack.push(field);
 
     if field.has_parameters() {
-        accumulator.push(stack.clone());
+        accumulator.push((true, stack.clone()));
     }
 
     if accumulator.len() == 0 {
-        accumulator.push(vec![stack[0]]);
+        accumulator.push((false, vec![stack[0]]));
     }
 
     for subfield in field.get_subfields() {
@@ -444,8 +460,8 @@ mod tests {
     use serde_json::value::Value;
     use std::pin::Pin;
 
-    pub fn create_cache() -> MemoryCache {
-        MemoryCache::new()
+    pub fn create_cache() -> Cache {
+        Cache::new()
     }
 
     #[tokio::test]
