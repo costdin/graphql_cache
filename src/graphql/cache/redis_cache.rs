@@ -10,8 +10,6 @@ pub struct RedisCache {
     inner_cache: InternalRedisCache,
 }
 
-const MAX_REDIS_NUMBER: u64 = 9007199254740992;
-
 impl RedisCache {
     pub async fn new(url: &str) -> Result<RedisCache, RedisCacheError> {
         let client = redis::Client::open(url)?;
@@ -105,7 +103,7 @@ impl InternalRedisCache {
 
     async fn get(&self, key: &String) -> Result<Option<Vec<Value>>, RedisCacheError> {
         let now: isize = Utc::now().timestamp().try_into().unwrap();
-        let (del_result, get_result): (redis::Value, Vec<String>) = redis::pipe()
+        let (_del_result, get_result): (redis::Value, Vec<String>) = redis::pipe()
             .zrembyscore(key, 0isize, now)
             .zrangebyscore(key, now, "+inf")
             .query_async(&mut self.connection.clone())

@@ -22,11 +22,11 @@ impl MemoryCache {
         }
     }
 
-    pub fn insert(&self, key: String, duration_seconds: u16, value: Value) {
+    pub async fn insert(&self, key: String, duration_seconds: u16, value: Value) {
         self.inner_cache.insert(key, duration_seconds, value);
     }
 
-    pub fn get(&self, key: &String) -> Option<Vec<Value>> {
+    pub async fn get(&self, key: &String) -> Option<Vec<Value>> {
         let r = self.inner_cache.get(key);
 
         match r {

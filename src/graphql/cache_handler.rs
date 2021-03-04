@@ -1,7 +1,7 @@
-use super::cache::{MemoryCache, RedisCache};
+use super::cache::{MemoryCache, RedisCache, Cache};
 use crate::graphql::json::{extract_mut, merge_json};
 use crate::graphql::parser::{
-    expand_operation, Document, Error, Field, FragmentDefinition, Operation, OperationType,
+    expand_operation, Error, Field, FragmentDefinition, Operation, OperationType,
     Parameter, ParameterValue, Traversable,
 };
 use crate::graphql_deserializer::{CacheHint, CacheScope, GraphQLResponse};
@@ -10,18 +10,6 @@ use serde_json::value::Value;
 use serde_json::{from_value, json};
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
-
-pub fn create_cache() -> MemoryCache {
-    MemoryCache::new()
-}
-
-pub async fn create_redis_cache() -> RedisCache {
-    match RedisCache::new("redis://192.168.1.186").await {
-        Ok(c) => c,
-        _ => panic!("aaaaaaaaaaaaaaaa"),
-    }
-}
 
 /// Executes an operation against the cache.
 /// Any residual field (which couldn't be solved by the cache) is forwarded to the get_fn() function
@@ -29,7 +17,7 @@ pub async fn execute_operation<'a, F, Fut>(
     operation: Operation<'a>,
     fragment_definitions: Vec<FragmentDefinition<'a>>,
     variables: Map<String, Value>,
-    cache: RedisCache,
+    cache: Cache,
     user_id: Option<String>,
     get_fn: F,
 ) -> Result<Value, Error>
@@ -39,7 +27,7 @@ where
 {
     // If the operation is not a query, forward the whole document to the getfn() function
     if operation.operation_type != OperationType::Query {
-        let (result, doc, var) = get_fn(operation, variables).await;
+        let (result, _, _) = get_fn(operation, variables).await;
         return result;
     }
 
@@ -92,7 +80,7 @@ where
 }
 
 async fn update_cache<'a>(
-    cache: RedisCache,
+    cache: Cache,
     user_id: &Option<String>,
     cache_hints: Vec<(Value, CacheHint)>,
     query: &Operation<'a>,
@@ -232,7 +220,7 @@ async fn match_field_with_cache<'a>(
     field: Field<'a>,
     variables: &Map<String, Value>,
     user_id: &Option<String>,
-    cache: &RedisCache,
+    cache: &Cache,
 ) -> (Option<Field<'a>>, Option<Value>) {
     let mut cached_value = json!({});
     for cf in cacheable_fields(&field) {
@@ -242,7 +230,18 @@ async fn match_field_with_cache<'a>(
         };
     }
     
-    match_field_with_cache_recursive(&mut Vec::new(), field, &variables, &user_id, Some(cached_value))
+    match cached_value {
+        Value::Object(mut map) => {
+            if let Some(root) = map.remove(field.get_name()) {
+                println!("{:#?}", root);
+
+                match_field_with_cache_recursive(&mut Vec::new(), field, &variables, &user_id, Some(root))
+            } else {
+                (Some(field), None)
+            }
+        },
+        _ => (Some(field), None)
+    }
 }
 
 fn match_field_with_cache_recursive<'a>(
@@ -393,7 +392,7 @@ fn fields_to_cache_key<'a>(fields: &[&Field<'a>], variables: &Map<String, Value>
 async fn get_cached_item<'a>(
     cache_key: &String,
     user_id: &Option<String>,
-    cache: &RedisCache,
+    cache: &Cache,
 ) -> Option<Value> {
     let public_cache = cache.get(&cache_key).await;
     let private_cache = match user_id {
@@ -452,7 +451,6 @@ fn extract_fields_with_parameters_recursive<'a>(
     stack.pop();
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +458,10 @@ mod tests {
     use serde_json::json;
     use serde_json::value::Value;
     use std::pin::Pin;
+
+    pub fn create_cache() -> MemoryCache {
+        MemoryCache::new()
+    }
 
     #[tokio::test]
     async fn execute_operation_does_not_send_request_if_all_fields_are_cached() {
@@ -853,4 +855,3 @@ mod tests {
         (result, document, variables)
     }
 }
-*/
