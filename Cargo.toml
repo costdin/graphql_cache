@@ -19,3 +19,4 @@ hyper = "0"
 itertools = "0"
 reqwest = { version = "0.11", features = ["json"] }
 redis = { version = "*", features = ["tokio-comp"] }
+futures = { version = "*" }
