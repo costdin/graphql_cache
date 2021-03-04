@@ -107,8 +107,13 @@ mod tests {
 
     #[test]
     fn extract_mut_can_xxx_hierarchy() {
-        let hierarchy = ["f1".to_string(), "subf3".to_string(), "subsubf1".to_string()];
-        let mut json = json!({"f1": { "subf1":1, "subf2":2, "subf3": {"subsubf1":31, "subsubf2": 32 } }});
+        let hierarchy = [
+            "f1".to_string(),
+            "subf3".to_string(),
+            "subsubf1".to_string(),
+        ];
+        let mut json =
+            json!({"f1": { "subf1":1, "subf2":2, "subf3": {"subsubf1":31, "subsubf2": 32 } }});
         let extracted = extract_mut(&mut json, &hierarchy).unwrap();
 
         let expected_extracted = json!({"f1": { "subf3": { "subsubf1":31 } }});

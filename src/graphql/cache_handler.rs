@@ -1,8 +1,8 @@
-use super::cache::{MemoryCache, RedisCache, Cache};
+use super::cache::{Cache, MemoryCache, RedisCache};
 use crate::graphql::json::{extract_mut, merge_json};
 use crate::graphql::parser::{
-    expand_operation, Error, Field, FragmentDefinition, Operation, OperationType,
-    Parameter, ParameterValue, Traversable,
+    expand_operation, Error, Field, FragmentDefinition, Operation, OperationType, Parameter,
+    ParameterValue, Traversable,
 };
 use crate::graphql_deserializer::{CacheHint, CacheScope, GraphQLResponse};
 use serde_json::map::Map;
@@ -229,23 +229,20 @@ async fn match_field_with_cache<'a>(
             None => {}
         };
     }
-    
+
     match cached_value {
         Value::Object(mut map) => {
             if let Some(root) = map.remove(field.get_name()) {
-                println!("{:#?}", root);
-
-                match_field_with_cache_recursive(&mut Vec::new(), field, &variables, &user_id, Some(root))
+                match_field_with_cache_recursive(field, &variables, &user_id, Some(root))
             } else {
                 (Some(field), None)
             }
-        },
-        _ => (Some(field), None)
+        }
+        _ => (Some(field), None),
     }
 }
 
 fn match_field_with_cache_recursive<'a>(
-    stack: &mut Vec<String>,
     field: Field<'a>,
     variables: &Map<String, Value>,
     user_id: &Option<String>,
@@ -267,8 +264,6 @@ fn match_field_with_cache_recursive<'a>(
         Some(Value::Object(map)) => map,
         _ => Map::new(),
     };
-
-    stack.push(field_to_cache_key(&field, variables));
 
     let (alias, name, subfields, parameters) = match field {
         Field::Field {
@@ -307,7 +302,7 @@ fn match_field_with_cache_recursive<'a>(
         };
 
         let (residual_subfield, from_cache) =
-            match_field_with_cache_recursive(stack, subfield, variables, user_id, field_from_cache);
+            match_field_with_cache_recursive(subfield, variables, user_id, field_from_cache);
 
         match residual_subfield {
             Some(f) => residual_subfields.push(f),
@@ -321,8 +316,6 @@ fn match_field_with_cache_recursive<'a>(
             None => {}
         };
     }
-
-    stack.pop();
 
     let residual_field_result = if residual_subfields.len() > 0 {
         Some(Field::new_field(
@@ -371,14 +364,6 @@ fn append_parameter_to_cache_key<'a>(
         ParameterValue::Object(obj) => result + &format!("OBJ{:?}", obj),
         ParameterValue::List(lst) => result + &format!("LST{:?}", lst),
     }
-}
-
-fn concatenate_cache_keys<'a>(
-    cache_keys: &[String],
-    field: &Field<'a>,
-    variables: &Map<String, Value>,
-) -> String {
-    cache_keys.join("+") + "+" + &field_to_cache_key(field, variables)
 }
 
 fn fields_to_cache_key<'a>(fields: &[&Field<'a>], variables: &Map<String, Value>) -> String {
