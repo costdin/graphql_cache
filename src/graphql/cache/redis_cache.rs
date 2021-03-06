@@ -76,16 +76,6 @@ impl InternalRedisCache {
         duration_seconds: u16,
         value: Value,
     ) -> Result<(), RedisCacheError> {
-        if value == Value::default() {
-            return Ok(());
-        }
-
-        if let Value::Object(map) = &value {
-            if map.len() == 0 {
-                return Ok(());
-            }
-        }
-
         let now: isize = Utc::now().timestamp().try_into().unwrap();
         let offset: isize = duration_seconds.try_into().unwrap();
         let score = now + offset;

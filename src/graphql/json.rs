@@ -58,7 +58,6 @@ pub fn extract_mut_ren(json_value: &mut Value, path: &[String], new_name: &str) 
     }
 }
 
-
 /*
 pub fn extract_mut(json_value: &mut Value, path: &[String]) -> Option<Value> {
     if path.len() == 1 {

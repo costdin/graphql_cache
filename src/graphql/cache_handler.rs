@@ -1,4 +1,4 @@
-use super::cache::{Cache};
+use super::cache::Cache;
 use crate::graphql::json::{extract_mut, extract_mut_ren, merge_json};
 use crate::graphql::parser::{
     expand_operation, Error, Field, FragmentDefinition, Operation, OperationType, Parameter,
@@ -124,7 +124,15 @@ fn get_cache_values<'a>(
         .map(|(from_param, fields)| {
             (
                 fields_to_cache_key(&fields, variables),
-                if from_param { extract_mut_ren(&mut value, &fields_to_json_path(&fields), &field_to_cache_key(fields.iter().last().unwrap(), &variables)) } else { extract_mut(&mut value, &fields_to_json_path(&fields)) },
+                if from_param {
+                    extract_mut_ren(
+                        &mut value,
+                        &fields_to_json_path(&fields),
+                        &field_to_cache_key(fields.iter().last().unwrap(), &variables),
+                    )
+                } else {
+                    extract_mut(&mut value, &fields_to_json_path(&fields))
+                },
                 fields,
             )
         })
@@ -224,6 +232,24 @@ async fn match_field_with_cache<'a>(
 ) -> (Option<Field<'a>>, Option<Value>) {
     let mut cached_value = json!({});
 
+    /* This seems to be slower (or at least make more allocations)
+    let keys: Vec<_> = cacheable_fields(&field)
+        .iter()
+        .map(|cf| fields_to_cache_key(&cf, &variables))
+        .collect();
+
+    let lambdaz = keys
+        .iter()
+        .map(|k| get_cached_item(&k, &user_id, &cache));
+
+    for item in join_all(lambdaz).await {
+        match item {
+            Some(x) => merge_json(&mut cached_value, x),
+            None => {}
+        }
+    }
+    */
+
     for cf in cacheable_fields(&field) {
         match get_cached_item(&fields_to_cache_key(&cf, &variables), &user_id, &cache).await {
             Some(x) => merge_json(&mut cached_value, x),
@@ -295,7 +321,7 @@ fn match_field_with_cache_recursive<'a>(
             &temp_subf
         } else {
             subfield.get_name()
-        };        
+        };
         let subfield_alias = String::from(subfield.get_alias());
 
         // If a subfield is unique, then extract the cache value from the cache object
@@ -367,15 +393,13 @@ fn append_parameter_to_cache_key<'a>(
     match &parameter.value {
         ParameterValue::Nil => result + "NIL",
         ParameterValue::Scalar(s) => result + s,
-        ParameterValue::Variable(v) => {
-            match &variables[*v] {
-                Value::Bool(b) => result + &format!("{}", b),
-                Value::Number(n) => result + &format!("{}", n),
-                Value::String(s) => result + &format!("\"{}\"", s),
-                Value::Object(o) => result + &format!("OBJ{:?}", o),
-                Value::Array(o) => result + &format!("LST{:?}", o),
-                Value::Null => result + "NIL",
-            }            
+        ParameterValue::Variable(v) => match &variables[*v] {
+            Value::Bool(b) => result + &format!("{}", b),
+            Value::Number(n) => result + &format!("{}", n),
+            Value::String(s) => result + &format!("\"{}\"", s),
+            Value::Object(o) => result + &format!("OBJ{:?}", o),
+            Value::Array(o) => result + &format!("LST{:?}", o),
+            Value::Null => result + "NIL",
         },
         ParameterValue::Object(obj) => result + &format!("OBJ{:?}", obj),
         ParameterValue::List(lst) => result + &format!("LST{:?}", lst),

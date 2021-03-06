@@ -54,10 +54,21 @@ impl GraphQLResponse {
             );
         }
 
-        stack.retain(|(value, _)| !value.is_null());
+        stack.retain(|(value, _)| object_has_value(value));
         compressed_hints.extend(stack);
 
         return (self.data, compressed_hints);
+    }
+}
+
+fn object_has_value(json_value: &Value) -> bool {
+    match json_value {
+        Value::Object(map) => map
+            .values()
+            .filter(|v| object_has_value(v))
+            .nth(0)
+            .is_some(),
+        _ => true,
     }
 }
 

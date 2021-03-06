@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::process::exit;
 use std::thread;
 use std::time::{Duration, SystemTime};
 use tokio::time::sleep;
@@ -88,8 +89,16 @@ async fn main() {
         .and(auth_token)
         .and_then(move |c, d, auth_token| stuff(c, d, auth_token, cache.clone()));
 
-    let routes = endpoint;
+    let end = warp::path("end").and_then(|| end());
+
+    let routes = endpoint.or(end);
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
+}
+
+async fn end() -> Result<impl warp::Reply, Infallible> {
+    exit(0);
+
+    Ok(format!("nein"))
 }
 
 fn test_parser() -> String {
