@@ -246,7 +246,7 @@ pub fn expand_operation<'a>(
     }
 
     for field in operation.fields {
-        for f in expand_fragment(field, &fragment_definitions)? {
+        for f in expand_fragment(field, &fragment_definitions, &mut vec!())? {
             new_fields.push(f);
         }
     }
@@ -259,23 +259,32 @@ pub fn expand_operation<'a>(
     });
 }
 
-fn expand_fragment<'a>(
+fn expand_fragment<'a, 'b>(
     field: Field<'a>,
-    fragments: &[FragmentDefinition<'a>],
+    fragments: &'b [FragmentDefinition<'a>],
+    fragment_stack: &mut Vec<&'b FragmentDefinition<'a>>
 ) -> Result<Vec<Field<'a>>, Error> {
     let fields = match field {
         Field::Fragment { name } => {
             let mut res = Vec::new();
-            for fragment_field in fragments
+            let fragment = fragments
                 .iter()
                 .filter(|f| f.name == name)
                 .nth(0)
-                .unwrap()
-                .fields
-                .iter()
+                .unwrap();
+
+            if fragment_stack.contains(&fragment) {
+                return Err(Error::new("Recursive fragment structure".to_string()));
+            }    
+    
+            fragment_stack.push(fragment);
+
+            for fragment_field in fragment.fields.iter()
             {
-                res.append(&mut expand_fragment(fragment_field.clone(), fragments)?);
+                res.append(&mut expand_fragment(fragment_field.clone(), fragments, fragment_stack)?);
             }
+
+            fragment_stack.pop();
 
             res
         }
@@ -287,7 +296,7 @@ fn expand_fragment<'a>(
         } => {
             let mut new_subfields = vec![];
             for subfield in subfields {
-                new_subfields.append(&mut expand_fragment(subfield, fragments)?);
+                new_subfields.append(&mut expand_fragment(subfield, fragments, fragment_stack)?);
             }
 
             vec![Field::Field {
@@ -799,6 +808,11 @@ pub struct FragmentDefinition<'a> {
     pub r#type: &'a str,
     pub fields: Vec<Field<'a>>,
 }
+
+impl<'a> PartialEq for FragmentDefinition<'a> {
+    fn eq(&self, other: &FragmentDefinition<'a>) -> bool {
+        return self.name == other.name && self.r#type == other.r#type
+    }}
 
 #[derive(Debug)]
 pub struct Operation<'a> {
