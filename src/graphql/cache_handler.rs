@@ -127,27 +127,28 @@ fn get_cache_values<'a>(
 
     // reverse collection so that fields closest to the root
     // are processed last
-    cacheable_fields.sort_by(|(_, path1), (_, path2)| path2.len().cmp(&path1.len()));
+    cacheable_fields.sort_by(|path1, path2| path2.len().cmp(&path1.len()));
 
     cacheable_fields
         .into_iter()
-        .map(|(from_param, fields)| {
+        .map(|fields| {
+            (fields
+            .iter()
+            .map(|f| field_to_cache_key(f, variables))
+            .collect::<Vec<String>>(),
+            fields) 
+        })
+        .map(|(field_keys, fields)| {
             (
-                fields_to_cache_key(&fields, variables),
-                if from_param {
-                    extract_mut_ren(
-                        &mut value,
-                        &fields_to_json_path(&fields),
-                        &field_to_cache_key(fields.iter().last().unwrap(), &variables),
-                    )
-                } else {
-                    extract_mut(&mut value, &fields_to_json_path(&fields))
-                },
+                field_keys.join("+"),
+                extract_mut(
+                    &mut value,
+                    &fields_to_json_path(&fields)),
                 fields,
             )
         })
         .filter(|(_, v, _)| v.is_some())
-        .map(|(cache_key, v, path)| (cache_key, dealias_fields(v.unwrap(), &path)))
+        .map(|(cache_key, v, path)| (cache_key, dealias_fields(v.unwrap(), &path, variables)))
         .collect::<Vec<_>>()
 }
 
@@ -158,36 +159,38 @@ fn fields_to_json_path(fields: &[&Field]) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
-fn dealias_fields(mut json_value: Value, path: &[&Field]) -> Value {
-    dealias_path_recursive(&mut json_value, path);
+fn dealias_fields(mut json_value: Value, path: &[&Field], variables: &Map<String, Value>) -> Value {
+    dealias_path_recursive(&mut json_value, path, variables);
 
     json_value
 }
 
-fn dealias_path_recursive(json_value: &mut Value, path: &[&Field]) {
+
+
+fn dealias_path_recursive(json_value: &mut Value, path: &[&Field], variables: &Map<String, Value>) {
     let (current_field, path_remainder): (&Field, &[&Field]) = match path {
         [] => return,
         [elem] => {
-            dealias_field(json_value, *elem);
+            dealias_field(json_value, *elem, variables);
             return;
         }
         p => (*p.iter().nth(0).unwrap(), &p[1..]),
     };
 
-    let (name, alias) = (current_field.get_name(), current_field.get_alias());
+    let (name, alias) = (field_to_cache_key(current_field, variables), current_field.get_alias());
 
     let map = match json_value {
         Value::Object(map) => map,
         _ => return,
     };
     let mut v = map.remove(alias).unwrap();
-    dealias_path_recursive(&mut v, path_remainder);
+    dealias_path_recursive(&mut v, path_remainder, variables);
 
     map.insert(String::from(name), v);
 }
 
-fn dealias_field(json_value: &mut Value, current_field: &Field) {
-    let (name, alias) = (current_field.get_name(), current_field.get_alias());
+fn dealias_field(json_value: &mut Value, current_field: &Field, variables: &Map<String, Value>) {
+    let (name, alias) = (field_to_cache_key(current_field, variables), current_field.get_alias());
 
     let map = match json_value {
         Value::Object(map) => map,
@@ -197,7 +200,7 @@ fn dealias_field(json_value: &mut Value, current_field: &Field) {
     match map.remove(alias) {
         Some(mut v) => {
             for subfield in current_field.get_subfields() {
-                dealias_field(&mut v, subfield);
+                dealias_field(&mut v, subfield, variables);
             }
 
             map.insert(String::from(name), v);
@@ -523,7 +526,7 @@ async fn get_cached_item<'a>(
 fn get_cacheable_fields<'a>(
     field: &'a Field<'a>,
     mut initial_path: Vec<&'a Field<'a>>,
-) -> Vec<(bool, Vec<&'a Field<'a>>)> {
+) -> Vec<Vec<&'a Field<'a>>> {
     let mut cachable_fields = Vec::new();
 
     extract_fields_with_parameters_recursive(field, &mut initial_path, &mut cachable_fields);
@@ -534,16 +537,16 @@ fn get_cacheable_fields<'a>(
 fn extract_fields_with_parameters_recursive<'a>(
     field: &'a Field<'a>,
     stack: &mut Vec<&'a Field<'a>>,
-    accumulator: &mut Vec<(bool, Vec<&'a Field<'a>>)>,
+    accumulator: &mut Vec<Vec<&'a Field<'a>>>,
 ) {
     stack.push(field);
 
     if field.has_parameters() {
-        accumulator.push((true, stack.clone()));
+        accumulator.push(stack.clone());
     }
 
     if accumulator.len() == 0 {
-        accumulator.push((false, vec![stack[0]]));
+        accumulator.push(vec![stack[0]]);
     }
 
     for subfield in field.get_subfields() {
