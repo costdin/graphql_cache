@@ -944,6 +944,51 @@ impl<'a> Field<'a> {
         }
     }
 
+    pub fn is_same_field(&self, field: &Field<'a>) -> bool {
+        match (self, &field) {
+            (Field::Field{ name, parameters, ..}, &Field::Field{ name: name2, parameters: parameters2, ..}) => {
+                name == name2 && parameters.len() == parameters2.len()
+                    && parameters.iter().all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
+            },
+            _ => false
+        }
+    }
+
+    // TODO: This can be optimized
+    fn has_same_parameters(&self, field: &Field<'a>) -> bool {
+        if self.get_parameters().len() != field.get_parameters().len() {
+            false
+        } else {
+            self.get_parameters()
+                .iter()
+                .all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
+        }
+    }
+
+    pub fn merge(&mut self, field: &Field<'a>) {
+        if self.get_name() == field.get_name() && self.has_same_parameters(field) {
+            match (self, field) {
+                (
+                    Field::Field {
+                        ref mut fields,
+                        ..
+                    },
+                    Field::Field {
+                        fields: fields2,
+                        ..
+                    },
+                ) => {
+                    let mut subfields = Vec::new();
+                    subfields.extend(fields.clone());
+                    subfields.extend(fields2.clone());
+
+                    *fields = merge_subfields(subfields);
+                }
+                _ => { }
+            }
+        }
+    }
+
     pub fn new_fragment(name: &'a str) -> Field<'a> {
         Field::Fragment { name: name }
     }
@@ -1015,51 +1060,6 @@ impl<'a> Field<'a> {
         match self {
             Field::Field { fields, .. } => &fields,
             _ => EMPTY_FIELD_LIST,
-        }
-    }
-
-    pub fn is_same_field(&self, field: &Field<'a>) -> bool {
-        match (self, &field) {
-            (Field::Field{ name, parameters, ..}, &Field::Field{ name: name2, parameters: parameters2, ..}) => {
-                name == name2 && parameters.len() == parameters2.len()
-                    && parameters.iter().all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
-            },
-            _ => false
-        }
-    }
-
-    // TODO: This can be optimized
-    fn has_same_parameters(&self, field: &Field<'a>) -> bool {
-        if self.get_parameters().len() != field.get_parameters().len() {
-            false
-        } else {
-            self.get_parameters()
-                .iter()
-                .all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
-        }
-    }
-
-    pub fn merge(&mut self, field: &Field<'a>) {
-        if self.get_name() == field.get_name() && self.has_same_parameters(field) {
-            match (self, field) {
-                (
-                    Field::Field {
-                        ref mut fields,
-                        ..
-                    },
-                    Field::Field {
-                        fields: fields2,
-                        ..
-                    },
-                ) => {
-                    let mut subfields = Vec::new();
-                    subfields.extend(fields.clone());
-                    subfields.extend(fields2.clone());
-
-                    *fields = merge_subfields(subfields);
-                }
-                _ => { }
-            }
         }
     }
 }
