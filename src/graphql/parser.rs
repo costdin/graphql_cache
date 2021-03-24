@@ -884,27 +884,6 @@ impl<'a> Traversable<'a> for Operation<'a> {
     }
 }
 
-fn merge_subfields(mut fields: Vec<Field>) -> Vec<Field> {
-    let mut new_subfields = Vec::new();
-
-    while fields.len() > 0 {
-        let mut subfield = fields.pop().unwrap();
-
-        let mut del = 0;
-        for ix in 0..fields.len() {
-            if fields[ix - del].is_same_field(&subfield) {
-                let f = fields.swap_remove(ix - del);
-                del += 1;
-                subfield.merge(&f);
-            }
-        }
-
-        new_subfields.push(subfield);
-    }
-
-    new_subfields
-}
-
 impl<'a> Traversable<'a> for Field<'a> {
     fn traverse(&self, path: &[String]) -> Option<(Vec<&Field<'a>>, &Field<'a>)> {
         if path.len() == 0 {
@@ -927,6 +906,27 @@ impl<'a> Traversable<'a> for Field<'a> {
             }
         }
     }
+}
+
+fn merge_subfields(mut fields: Vec<Field>) -> Vec<Field> {
+    let mut new_subfields = Vec::new();
+
+    while fields.len() > 0 {
+        let mut subfield = fields.pop().unwrap();
+
+        let mut del = 0;
+        for ix in 0..fields.len() {
+            if fields[ix - del].is_same_field(&subfield) {
+                let f = fields.swap_remove(ix - del);
+                del += 1;
+                subfield.merge(&f);
+            }
+        }
+
+        new_subfields.push(subfield);
+    }
+
+    new_subfields
 }
 
 impl<'a> Field<'a> {
