@@ -1,5 +1,6 @@
 mod tokenizer;
 use tokenizer::Tokenizer;
+use std::collections::HashSet;
 
 pub fn parse_query<'a>(query: &'a str) -> Result<Document<'a>, Error> {
     let mut operations = Vec::<Operation>::new();
@@ -776,7 +777,7 @@ struct ParserState<'a> {
     hierarchy: Vec<&'a str>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Variable<'a> {
     pub name: &'a str,
     pub r#type: &'a str,
@@ -826,6 +827,47 @@ pub trait Traversable<'a> {
     fn traverse(&self, path: &[String]) -> Option<(Vec<&Field<'a>>, &Field<'a>)>;
 }
 
+impl<'a> Operation<'a> {    
+    pub fn deduplicate_fields(&self) -> Result<Operation<'a>, Error> {
+        let mut new_fields = Vec::new();
+        new_fields.extend(self.fields.clone());
+
+        let merged_fields = merge_subfields(new_fields);
+        let residual_variable_names = get_variables(&merged_fields);
+        let residual_variables = self.variables
+            .iter()
+            .filter(|v| residual_variable_names.contains(&v.name.to_string()))
+            .map(|v| v.clone())
+            .collect::<Vec<Variable<'a>>>();
+
+        let op = Operation {
+            name: self.name.clone(),
+            operation_type: self.operation_type,
+            variables: residual_variables,
+            fields: merged_fields
+        };
+
+        Ok(op)
+    }
+}
+
+fn get_variables(fields: &[Field]) -> HashSet<String> {
+    let mut hash = HashSet::new();
+
+    for f in fields {
+        for p in f.get_parameters() {
+            match &p.value {
+                ParameterValue::Variable(v) => { hash.insert(v.to_string()); },
+                _ => { }
+            }
+        }
+
+        hash.extend(get_variables(f.get_subfields()));
+    }
+
+    hash
+}
+
 impl<'a> Traversable<'a> for Operation<'a> {
     fn traverse(&self, path: &[String]) -> Option<(Vec<&Field<'a>>, &Field<'a>)> {
         if path.len() == 0 {
@@ -840,6 +882,27 @@ impl<'a> Traversable<'a> for Operation<'a> {
                 .unwrap_or(None)
         }
     }
+}
+
+fn merge_subfields(mut fields: Vec<Field>) -> Vec<Field> {
+    let mut new_subfields = Vec::new();
+
+    while fields.len() > 0 {
+        let mut subfield = fields.pop().unwrap();
+
+        let mut del = 0;
+        for ix in 0..fields.len() {
+            if fields[ix - del].is_same_field(&subfield) {
+                let f = fields.swap_remove(ix - del);
+                del += 1;
+                subfield.merge(&f);
+            }
+        }
+
+        new_subfields.push(subfield);
+    }
+
+    new_subfields
 }
 
 impl<'a> Traversable<'a> for Field<'a> {
@@ -954,18 +1017,63 @@ impl<'a> Field<'a> {
             _ => EMPTY_FIELD_LIST,
         }
     }
+
+    pub fn is_same_field(&self, field: &Field<'a>) -> bool {
+        match (self, &field) {
+            (Field::Field{ name, parameters, ..}, &Field::Field{ name: name2, parameters: parameters2, ..}) => {
+                name == name2 && parameters.len() == parameters2.len()
+                    && parameters.iter().all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
+            },
+            _ => false
+        }
+    }
+
+    // TODO: This can be optimized
+    fn has_same_parameters(&self, field: &Field<'a>) -> bool {
+        if self.get_parameters().len() != field.get_parameters().len() {
+            false
+        } else {
+            self.get_parameters()
+                .iter()
+                .all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
+        }
+    }
+
+    pub fn merge(&mut self, field: &Field<'a>) {
+        if self.get_name() == field.get_name() && self.has_same_parameters(field) {
+            match (self, field) {
+                (
+                    Field::Field {
+                        ref mut fields,
+                        ..
+                    },
+                    Field::Field {
+                        fields: fields2,
+                        ..
+                    },
+                ) => {
+                    let mut subfields = Vec::new();
+                    subfields.extend(fields.clone());
+                    subfields.extend(fields2.clone());
+
+                    *fields = merge_subfields(subfields);
+                }
+                _ => { }
+            }
+        }
+    }
 }
 
 static EMPTY_PARAMETER_LIST: &'static [Parameter] = &[];
 static EMPTY_FIELD_LIST: &'static [Field] = &[];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Parameter<'a> {
     pub name: &'a str,
     pub value: ParameterValue<'a>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParameterValue<'a> {
     Nil,
     Scalar(&'a str),
@@ -981,7 +1089,7 @@ pub enum OperationType {
     Subscription,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParameterField<'a> {
     name: &'a str,
     value: ParameterValue<'a>,

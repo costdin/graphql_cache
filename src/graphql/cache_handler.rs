@@ -5,11 +5,13 @@ use crate::graphql::parser::{
     ParameterValue, Traversable,
 };
 use crate::graphql_deserializer::{CacheHint, CacheScope, GraphQLResponse};
+use itertools::Itertools;
 use serde_json::map::Map;
 use serde_json::value::Value;
 use serde_json::{from_value, json};
 use std::collections::HashMap;
 use std::future::Future;
+use futures::future::join_all;
 
 /// Executes an operation against the cache.
 /// Any residual field (which couldn't be solved by the cache) is forwarded to the get_fn() function
@@ -31,52 +33,60 @@ where
         return result;
     }
 
-    let mut cached_result = Map::new();
-
     // Replace all fragments with actual fields
     // Expanded operation does not contain any fragment
     let expanded_operation = expand_operation(operation, fragment_definitions)?;
+    let (residual_operation, data_from_cache) = match_operation_with_cache(expanded_operation, &variables, &user_id, &cache).await;
 
-    let mut residual_fields = Vec::<Field>::new();
-    for field in expanded_operation.fields {
-        let alias = String::from(field.get_alias());
-        let (residual_field, cached_field) =
-            match_field_with_cache(field, &variables, &user_id, &cache).await;
+    match residual_operation {
+        Some(operation) => {
+            let deduplicated_operation = operation.deduplicate_fields()?;
 
-        match residual_field {
-            Some(f) => residual_fields.push(f),
-            None => {}
-        };
+            let (response, op, var) = get_fn(deduplicated_operation, variables).await;
+            let result: GraphQLResponse = from_value(response?)?;
+            let (mut response_data, hints) = result.compress_cache_hints();
+    
+            update_cache(cache, &user_id, hints, &op, &var).await;
+            merge_json(&mut response_data, data_from_cache);
 
-        match cached_field {
-            Some(r) => {
-                cached_result.insert(alias, r);
-            }
-            None => {}
-        };
+            let final_result = expand_response(response_data, &op, &operation);
+
+            Ok(json!({ "data": final_result }))
+        },
+        None => Ok(json!({ "data": data_from_cache }))
+    }
+}
+
+fn expand_response(json: Value, deduplicated_operation: &Operation, operation: &Operation) -> Value {
+    let mut map = match json {
+        Value::Object(map) => map,
+        _ => return json
+    };
+
+    for f in operation.fields.iter() {
+        let df = deduplicated_operation.fields.iter().filter(|ff| ff.is_same_field(f)).nth(0).unwrap();
+        let v = map[df.get_alias()].clone();
+
+        map.insert(f.get_alias().to_string(), expand_response_field(v, df, f));
     }
 
-    let data_from_cache = Value::Object(cached_result);
+    Value::Object(map)
+}
 
-    if residual_fields.len() > 0 {
-        let operation = Operation {
-            name: expanded_operation.name,
-            fields: residual_fields,
-            variables: expanded_operation.variables,
-            operation_type: expanded_operation.operation_type,
-        };
+fn expand_response_field(json: Value, deduplicated_field: &Field, field: &Field) -> Value {
+    let mut map = match json {
+        Value::Object(map) => map,
+        _ => return json
+    };
 
-        let (response, op, var) = get_fn(operation, variables).await;
-        let result: GraphQLResponse = from_value(response?)?;
-        let (mut response_data, hints) = result.compress_cache_hints();
+    for f in field.get_subfields().iter() {
+        let df = deduplicated_field.get_subfields().iter().filter(|ff| ff.is_same_field(f)).nth(0).unwrap();
+        let v = map[df.get_alias()].clone();
 
-        update_cache(cache, &user_id, hints, &op, &var).await;
-        merge_json(&mut response_data, data_from_cache);
-
-        Ok(json!({ "data": response_data }))
-    } else {
-        Ok(json!({ "data": data_from_cache }))
+        map.insert(f.get_alias().to_string(), expand_response_field(v, df, f));
     }
+
+    Value::Object(map)
 }
 
 async fn update_cache<'a>(
@@ -224,6 +234,74 @@ fn cacheable_fields_int<'a>(
     stack.pop();
 }
 
+async fn match_operation_with_cache<'a>(
+    operation: Operation<'a>,
+    variables: &Map<String, Value>,
+    user_id: &Option<String>,
+    cache: &Cache,
+) -> (Option<Operation<'a>>, Value) {
+    let mut residual_fields = Vec::<Field>::new();
+    let mut cached_result = Map::new();
+    let mut cached_value = json!({});
+
+    let cache_keys = operation.fields
+        .iter()
+        .map(cacheable_fields)
+        .flatten()
+        .map(|f| fields_to_cache_key(&f, &variables))
+        .unique()
+        .collect::<Vec<_>>();
+
+    let cache_requests = cache_keys
+        .iter()
+        .map(|key| get_cached_item(&key, &user_id, &cache));
+    let cache_items = join_all(cache_requests).await;
+
+    for item in cache_items {
+        match item {
+            Some(x) => merge_json(&mut cached_value, x),
+            None => {}
+        }
+    }
+    
+    for field in operation.fields {
+        let alias = String::from(field.get_alias());
+        let v = cached_value.get(field_to_cache_key(&field, &variables));
+
+        let (residual_field, cached_field) = match v {
+            Some(cached_value) => match_field_with_cache_recursive(field, &variables, Some(cached_value.clone())),
+            None => (Some(field), None)
+        };
+
+        match residual_field {
+            Some(f) => residual_fields.push(f),
+            None => {}
+        };
+
+        match cached_field {
+            Some(r) => {
+                cached_result.insert(alias, r);
+            }
+            None => {}
+        };
+    }
+
+    let residual_operation = if residual_fields.len() > 0 {
+        let operation = Operation {
+            name: operation.name,
+            fields: residual_fields,
+            variables: operation.variables,
+            operation_type: operation.operation_type,
+        };
+
+        Some(operation)
+    } else {
+        None
+    };
+
+    (residual_operation, Value::Object(cached_result))
+}
+
 async fn match_field_with_cache<'a>(
     field: Field<'a>,
     variables: &Map<String, Value>,
@@ -260,7 +338,7 @@ async fn match_field_with_cache<'a>(
     match cached_value {
         Value::Object(mut map) => {
             if let Some(root) = map.remove(field.get_name()) {
-                match_field_with_cache_recursive(field, &variables, &user_id, Some(root))
+                match_field_with_cache_recursive(field, &variables, Some(root))
             } else {
                 (Some(field), None)
             }
@@ -272,7 +350,6 @@ async fn match_field_with_cache<'a>(
 fn match_field_with_cache_recursive<'a>(
     field: Field<'a>,
     variables: &Map<String, Value>,
-    user_id: &Option<String>,
     cached_value: Option<Value>,
 ) -> (Option<Field<'a>>, Option<Value>) {
     if field.is_leaf() {
@@ -335,7 +412,7 @@ fn match_field_with_cache_recursive<'a>(
         };
 
         let (residual_subfield, from_cache) =
-            match_field_with_cache_recursive(subfield, variables, user_id, field_from_cache);
+            match_field_with_cache_recursive(subfield, variables, field_from_cache);
 
         match residual_subfield {
             Some(f) => residual_subfields.push(f),
