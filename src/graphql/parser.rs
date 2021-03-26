@@ -1,5 +1,6 @@
 mod tokenizer;
 use tokenizer::Tokenizer;
+use std::collections::HashSet;
 
 pub fn parse_query<'a>(query: &'a str) -> Result<Document<'a>, Error> {
     let mut operations = Vec::<Operation>::new();
@@ -246,7 +247,7 @@ pub fn expand_operation<'a>(
     }
 
     for field in operation.fields {
-        for f in expand_fragment(field, &fragment_definitions)? {
+        for f in expand_fragment(field, &fragment_definitions, &mut vec!())? {
             new_fields.push(f);
         }
     }
@@ -259,23 +260,32 @@ pub fn expand_operation<'a>(
     });
 }
 
-fn expand_fragment<'a>(
+fn expand_fragment<'a, 'b>(
     field: Field<'a>,
-    fragments: &[FragmentDefinition<'a>],
+    fragments: &'b [FragmentDefinition<'a>],
+    fragment_stack: &mut Vec<&'b FragmentDefinition<'a>>
 ) -> Result<Vec<Field<'a>>, Error> {
     let fields = match field {
         Field::Fragment { name } => {
             let mut res = Vec::new();
-            for fragment_field in fragments
+            let fragment = fragments
                 .iter()
                 .filter(|f| f.name == name)
                 .nth(0)
-                .unwrap()
-                .fields
-                .iter()
+                .unwrap();
+
+            if fragment_stack.contains(&fragment) {
+                return Err(Error::new("Recursive fragment structure".to_string()));
+            }    
+    
+            fragment_stack.push(fragment);
+
+            for fragment_field in fragment.fields.iter()
             {
-                res.append(&mut expand_fragment(fragment_field.clone(), fragments)?);
+                res.append(&mut expand_fragment(fragment_field.clone(), fragments, fragment_stack)?);
             }
+
+            fragment_stack.pop();
 
             res
         }
@@ -287,7 +297,7 @@ fn expand_fragment<'a>(
         } => {
             let mut new_subfields = vec![];
             for subfield in subfields {
-                new_subfields.append(&mut expand_fragment(subfield, fragments)?);
+                new_subfields.append(&mut expand_fragment(subfield, fragments, fragment_stack)?);
             }
 
             vec![Field::Field {
@@ -767,7 +777,7 @@ struct ParserState<'a> {
     hierarchy: Vec<&'a str>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Variable<'a> {
     pub name: &'a str,
     pub r#type: &'a str,
@@ -800,6 +810,11 @@ pub struct FragmentDefinition<'a> {
     pub fields: Vec<Field<'a>>,
 }
 
+impl<'a> PartialEq for FragmentDefinition<'a> {
+    fn eq(&self, other: &FragmentDefinition<'a>) -> bool {
+        return self.name == other.name && self.r#type == other.r#type
+    }}
+
 #[derive(Debug)]
 pub struct Operation<'a> {
     pub operation_type: OperationType,
@@ -810,6 +825,47 @@ pub struct Operation<'a> {
 
 pub trait Traversable<'a> {
     fn traverse(&self, path: &[String]) -> Option<(Vec<&Field<'a>>, &Field<'a>)>;
+}
+
+impl<'a> Operation<'a> {    
+    pub fn deduplicate_fields(&self) -> Result<Operation<'a>, Error> {
+        let mut new_fields = Vec::new();
+        new_fields.extend(self.fields.clone());
+
+        let merged_fields = merge_subfields(new_fields);
+        let residual_variable_names = get_variables(&merged_fields);
+        let residual_variables = self.variables
+            .iter()
+            .filter(|v| residual_variable_names.contains(&v.name.to_string()))
+            .map(|v| v.clone())
+            .collect::<Vec<Variable<'a>>>();
+
+        let op = Operation {
+            name: self.name.clone(),
+            operation_type: self.operation_type,
+            variables: residual_variables,
+            fields: merged_fields
+        };
+
+        Ok(op)
+    }
+}
+
+fn get_variables(fields: &[Field]) -> HashSet<String> {
+    let mut hash = HashSet::new();
+
+    for f in fields {
+        for p in f.get_parameters() {
+            match &p.value {
+                ParameterValue::Variable(v) => { hash.insert(v.to_string()); },
+                _ => { }
+            }
+        }
+
+        hash.extend(get_variables(f.get_subfields()));
+    }
+
+    hash
 }
 
 impl<'a> Traversable<'a> for Operation<'a> {
@@ -852,6 +908,27 @@ impl<'a> Traversable<'a> for Field<'a> {
     }
 }
 
+fn merge_subfields(mut fields: Vec<Field>) -> Vec<Field> {
+    let mut new_subfields = Vec::new();
+
+    while fields.len() > 0 {
+        let mut subfield = fields.pop().unwrap();
+
+        let mut del = 0;
+        for ix in 0..fields.len() {
+            if fields[ix - del].is_same_field(&subfield) {
+                let f = fields.swap_remove(ix - del);
+                del += 1;
+                subfield.merge(&f);
+            }
+        }
+
+        new_subfields.push(subfield);
+    }
+
+    new_subfields
+}
+
 impl<'a> Field<'a> {
     pub fn new_field(
         alias: Option<&'a str>,
@@ -864,6 +941,51 @@ impl<'a> Field<'a> {
             name: name,
             parameters: parameters,
             fields: fields,
+        }
+    }
+
+    pub fn is_same_field(&self, field: &Field<'a>) -> bool {
+        match (self, &field) {
+            (Field::Field{ name, parameters, ..}, &Field::Field{ name: name2, parameters: parameters2, ..}) => {
+                name == name2 && parameters.len() == parameters2.len()
+                    && parameters.iter().all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
+            },
+            _ => false
+        }
+    }
+
+    // TODO: This can be optimized
+    fn has_same_parameters(&self, field: &Field<'a>) -> bool {
+        if self.get_parameters().len() != field.get_parameters().len() {
+            false
+        } else {
+            self.get_parameters()
+                .iter()
+                .all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
+        }
+    }
+
+    pub fn merge(&mut self, field: &Field<'a>) {
+        if self.get_name() == field.get_name() && self.has_same_parameters(field) {
+            match (self, field) {
+                (
+                    Field::Field {
+                        ref mut fields,
+                        ..
+                    },
+                    Field::Field {
+                        fields: fields2,
+                        ..
+                    },
+                ) => {
+                    let mut subfields = Vec::new();
+                    subfields.extend(fields.clone());
+                    subfields.extend(fields2.clone());
+
+                    *fields = merge_subfields(subfields);
+                }
+                _ => { }
+            }
         }
     }
 
@@ -945,13 +1067,13 @@ impl<'a> Field<'a> {
 static EMPTY_PARAMETER_LIST: &'static [Parameter] = &[];
 static EMPTY_FIELD_LIST: &'static [Field] = &[];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Parameter<'a> {
     pub name: &'a str,
     pub value: ParameterValue<'a>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParameterValue<'a> {
     Nil,
     Scalar(&'a str),
@@ -967,7 +1089,7 @@ pub enum OperationType {
     Subscription,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParameterField<'a> {
     name: &'a str,
     value: ParameterValue<'a>,
@@ -1258,5 +1380,348 @@ mod tests {
         let serialized_query = serialize_document(&parsed_query);
 
         assert_eq!(query, serialized_query);
+    }
+
+    #[test]
+    fn fields_can_be_merged() {
+        let mut field1 = Field::new_field(
+            None,
+            "field",
+            vec![],
+            vec![Field::new_field(
+                None,
+                "subfield",
+                vec![],
+                vec![],
+            )],
+        );
+
+        let field2 = Field::new_field(
+            None,
+            "field",
+            vec![],
+            vec![Field::new_field(
+                None,
+                "subfield2",
+                vec![],
+                vec![],
+            )],
+        );
+
+        field1.merge(&field2);
+
+        let (alias, name, parameters, subfields) = match field1 {
+            Field::Field {
+                alias,
+                name,
+                parameters,
+                fields,
+            } => (alias, name, parameters, fields),
+            _ => panic!("invalid field"),
+        };
+
+        assert_eq!(None, alias);
+        assert_eq!("field", name);
+        assert_eq!(0, parameters.len());
+        assert_eq!(2, subfields.len());
+        assert_eq!(
+            "subfield",
+            subfields
+                .iter()
+                .filter(|s| s.get_name() == "subfield")
+                .nth(0)
+                .unwrap()
+                .get_name()
+        );
+        assert_eq!(
+            "subfield2",
+            subfields
+                .iter()
+                .filter(|s| s.get_name() == "subfield2")
+                .nth(0)
+                .unwrap()
+                .get_name()
+        );
+    }
+
+    #[test]
+    fn deep_fields_can_be_merged() {
+        let mut field1 = Field::new_field(
+            None,
+            "field",
+            vec![],
+            vec![Field::new_field(
+                None,
+                "subfield",
+                vec![],
+                vec![
+                    Field::new_field(None, "subsubfield", vec![], vec![]),
+                    Field::new_field(None, "subsubfield2", vec![], vec![]),
+                ],
+            )],
+        );
+
+        let field2 = Field::new_field(
+            None,
+            "field",
+            vec![],
+            vec![
+                Field::new_field(
+                    None,
+                    "subfield",
+                    vec![],
+                    vec![
+                        Field::new_field(None, "subsubfield3", vec![], vec![]),
+                        Field::new_field(None, "subsubfield4", vec![], vec![]),
+                    ],
+                ),
+                Field::new_field(
+                    None,
+                    "subfield2",
+                    vec![],
+                    vec![Field::new_field(
+                        None,
+                        "subsubfield5",
+                        vec![],
+                        vec![],
+                    )],
+                ),
+            ],
+        );
+
+        field1.merge(&field2);
+
+        let (alias, name, parameters, subfields) = match field1 {
+            Field::Field {
+                alias,
+                name,
+                parameters,
+                fields,
+            } => (alias, name, parameters, fields),
+            _ => panic!("invalid field"),
+        };
+
+        assert_eq!(None, alias);
+        assert_eq!("field", name);
+        assert_eq!(0, parameters.len());
+        assert_eq!(2, subfields.len());
+
+        let subfield = subfields
+            .iter()
+            .filter(|s| s.get_name() == "subfield")
+            .nth(0)
+            .unwrap();
+        let subfield2 = subfields
+            .iter()
+            .filter(|s| s.get_name() == "subfield2")
+            .nth(0)
+            .unwrap();
+
+        assert_eq!("subfield", subfield.get_name());
+        assert_eq!("subfield2", subfield2.get_name());
+        assert_eq!(4, subfield.get_subfields().len());
+        assert_eq!(1, subfield2.get_subfields().len());
+
+        let subsubfield = subfield
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield")
+            .nth(0)
+            .unwrap();
+        let subsubfield2 = subfield
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield2")
+            .nth(0)
+            .unwrap();
+        let subsubfield3 = subfield
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield3")
+            .nth(0)
+            .unwrap();
+        let subsubfield4 = subfield
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield4")
+            .nth(0)
+            .unwrap();
+        let subsubfield5 = subfield2
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield5")
+            .nth(0)
+            .unwrap();
+        assert_eq!("subsubfield", subsubfield.get_name());
+        assert_eq!("subsubfield2", subsubfield2.get_name());
+        assert_eq!("subsubfield3", subsubfield3.get_name());
+        assert_eq!("subsubfield4", subsubfield4.get_name());
+        assert_eq!("subsubfield5", subsubfield5.get_name());
+    }
+
+    #[test]
+    fn deep_fields_can_be_merged_preserving_parameters() {
+        let mut field1 = Field::new_field(
+            None,
+            "field",
+            vec![],
+            vec![
+                Field::new_field(
+                    None,
+                    "subfield",
+                    vec![Parameter {
+                        name: "p1",
+                        value: ParameterValue::Scalar("12"),
+                    }],
+                    vec![
+                        Field::new_field(None, "subsubfield", vec![], vec![]),
+                        Field::new_field(None, "subsubfield2", vec![], vec![]),
+                    ],
+                ),
+                Field::new_field(
+                    None,
+                    "subfield2",
+                    vec![],
+                    vec![Field::new_field(
+                        None,
+                        "subsubfield6",
+                        vec![],
+                        vec![],
+                    )],
+                ),
+            ],
+        );
+
+        let field2 = Field::new_field(
+            None,
+            "field",
+            vec![],
+            vec![
+                Field::new_field(
+                    None,
+                    "subfield",
+                    vec![Parameter {
+                        name: "p1",
+                        value: ParameterValue::Scalar("22"),
+                    }],
+                    vec![
+                        Field::new_field(None, "subsubfield3", vec![], vec![]),
+                        Field::new_field(None, "subsubfield4", vec![], vec![]),
+                    ],
+                ),
+                Field::new_field(
+                    None,
+                    "subfield2",
+                    vec![],
+                    vec![Field::new_field(
+                        None,
+                        "subsubfield5",
+                        vec![],
+                        vec![],
+                    )],
+                ),
+            ],
+        );
+
+        field1.merge(&field2);
+
+        let (alias, name, parameters, subfields) = match field1 {
+            Field::Field {
+                alias,
+                name,
+                parameters,
+                fields,
+            } => (alias, name, parameters, fields),
+            _ => panic!("invalid field"),
+        };
+
+        assert_eq!(None, alias);
+        assert_eq!("field", name);
+        assert_eq!(0, parameters.len());
+        assert_eq!(3, subfields.len());
+
+        let subfield = subfields
+            .iter()
+            .filter(|s| {
+                s.get_name() == "subfield"
+                    && if let ParameterValue::Scalar(v) =
+                        &s.get_parameters().iter().nth(0).unwrap().value
+                    {
+                        v == &"12"
+                    } else {
+                        false
+                    }
+            })
+            .nth(0)
+            .unwrap();
+        let subfield_d = subfields
+            .iter()
+            .filter(|s| {
+                s.get_name() == "subfield"
+                    && if let ParameterValue::Scalar(v) =
+                        &s.get_parameters().iter().nth(0).unwrap().value
+                    {
+                        v == &"22"
+                    } else {
+                        false
+                    }
+            })
+            .nth(0)
+            .unwrap();
+        let subfield2 = subfields
+            .iter()
+            .filter(|s| s.get_name() == "subfield2")
+            .nth(0)
+            .unwrap();
+
+        assert_eq!("subfield", subfield.get_name());
+        assert_eq!("subfield", subfield_d.get_name());
+        assert_eq!("subfield2", subfield2.get_name());
+        assert_eq!(2, subfield.get_subfields().len());
+        assert_eq!(2, subfield_d.get_subfields().len());
+        assert_eq!(2, subfield2.get_subfields().len());
+
+        let subsubfield = subfield
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield")
+            .nth(0)
+            .unwrap();
+        let subsubfield2 = subfield
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield2")
+            .nth(0)
+            .unwrap();
+        let subsubfield3 = subfield_d
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield3")
+            .nth(0)
+            .unwrap();
+        let subsubfield4 = subfield_d
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield4")
+            .nth(0)
+            .unwrap();
+        let subsubfield5 = subfield2
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield5")
+            .nth(0)
+            .unwrap();
+        let subsubfield6 = subfield2
+            .get_subfields()
+            .iter()
+            .filter(|s| s.get_name() == "subsubfield6")
+            .nth(0)
+            .unwrap();
+        assert_eq!("subsubfield", subsubfield.get_name());
+        assert_eq!("subsubfield2", subsubfield2.get_name());
+        assert_eq!("subsubfield3", subsubfield3.get_name());
+        assert_eq!("subsubfield4", subsubfield4.get_name());
+        assert_eq!("subsubfield5", subsubfield5.get_name());
+        assert_eq!("subsubfield6", subsubfield6.get_name());
     }
 }

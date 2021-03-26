@@ -36,11 +36,11 @@ pub fn extract_mut(json_value: &mut Value, path: &[String]) -> Option<Value> {
     }
 }
 
-pub fn extract_mut_ren(json_value: &mut Value, path: &[String], new_name: &str) -> Option<Value> {
+pub fn extract_mut_ren(json_value: &mut Value, path: &[String], new_names: &[String]) -> Option<Value> {
     if path.len() == 1 {
         match json_value {
             Value::Object(v) => match v.remove(&path[0]) {
-                Some(f) => Some(json!({ new_name: f })),
+                Some(f) => Some(json!({ &new_names[0]: f })),
                 None => None,
             },
             _ => None,
@@ -48,8 +48,8 @@ pub fn extract_mut_ren(json_value: &mut Value, path: &[String], new_name: &str) 
     } else {
         match json_value {
             Value::Object(v) if v.contains_key(&path[0]) => {
-                match extract_mut_ren(v.get_mut(&path[0]).unwrap(), &path[1..], new_name) {
-                    Some(f) => Some(json!({ &path[0]: f })),
+                match extract_mut_ren(v.get_mut(&path[0]).unwrap(), &path[1..], &new_names[1..]) {
+                    Some(f) => Some(json!({ &new_names[0]: f })),
                     None => None,
                 }
             }
