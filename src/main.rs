@@ -227,42 +227,6 @@ mod tests {
         assert!(result9.is_ok());
     }
     
-    #[cfg(feature = "slow_tests")]
-    #[test]
-    fn test_cache_cleanup() -> () {
-        let cache = graphql::cache::MemoryCache::new();
-        let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
-    
-        block_on(cache.insert(format!("xxxx0"), 50000, json.clone()));
-        for i in 0..1000000 {
-            block_on(cache.insert(format!("xxxx{}", i), 1, json.clone()));
-        }
-    
-        std::thread::sleep(Duration::from_secs(5));
-    
-        // At this point, all entries have expired, apart from `xxxx0`
-
-        let c = cache.clone();
-        let thread = thread::spawn(move || {
-            let mut rng = rand::thread_rng();
-    
-            for _ in 0..1000000 {
-                let i = rng.gen_range(0..1000000);
-                let key = format!("xxxx{}", i);
-                let v = c.get(&key);
-                assert!(block_on(v).is_none());
-            }
-        });
-    
-        std::thread::sleep(Duration::from_secs(10));
-    
-        let key = format!("xxxx0");
-        let cache_entry = cache.get(&key);
-        assert!(block_on(cache_entry).is_some());
-    
-        assert!(thread.join().is_ok());
-    }
-    
     #[tokio::test]
     async fn test_cache_small() -> () {
         let cache = graphql::cache::MemoryCache::new();
@@ -275,181 +239,6 @@ mod tests {
             Some(_) => {}
             None => assert_eq!(1, 0)
         };
-    }
-    
-    #[cfg(feature = "slow_tests")]
-    #[tokio::test]
-    async fn test_cache() -> () {
-        let cache = graphql::cache::MemoryCache::new();
-    
-        let c = cache.clone();
-        let d = cache.clone();
-        let e = cache.clone();
-        let f = cache.clone();
-    
-        let vc: Value = serde_json::from_str(r#"{"a": 1234}"#).unwrap();
-        let vd: Value = serde_json::from_str(r#"{"a": 5555}"#).unwrap();
-    
-        let start = SystemTime::now();
-        block_on(cache.insert(String::from("adsasd0"), 010, vc.clone()));
-        block_on(cache.insert(String::from("adsasd1"), 123, vd.clone()));
-        block_on(cache.insert(String::from("adsasd2"), 123, vd.clone()));
-        block_on(cache.insert(String::from("adsasd3"), 123, vd.clone()));
-        block_on(cache.insert(String::from("adsasd4"), 123, vd.clone()));
-        block_on(cache.insert(String::from("adsasd5"), 123, vd.clone()));
-        block_on(cache.insert(String::from("adsasd6"), 123, vd.clone()));
-        block_on(cache.insert(String::from("adsasd7"), 123, vd.clone()));
-    
-        println!("{{ \"v\": 11 }}");
-    
-        let mut threads = Vec::new();
-        for i in 0..1000 {
-            let fff = cache.clone();
-            let ttt = thread::spawn(move || {
-                let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
-    
-                for x in 0i32..10000 {
-                    let c = if i % 2 == 0 { 10000 - x } else { x };
-    
-                    block_on(fff.insert(format!("1aaaddccc{}", c), 1, json.clone()));
-                    block_on(fff.insert(format!("1aaa{}{}", i, c), 100, json.clone()));
-    
-                    match block_on(fff.get(&format!("1aaa{}{}", i, c))) {
-                        Some(_) => {},
-                        None => assert_eq!(1, 0)
-                    };
-                }
-            });
-    
-            threads.push(ttt);
-        }
-    
-        let t1 = thread::spawn(move || {
-            let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
-    
-            for x in 0..10000 {
-                let daaaa = json.clone();
-                block_on(c.insert(format!("aaa{}", x), 1, daaaa));
-            }
-        });
-    
-        let t2 = thread::spawn(move || {
-            let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
-    
-            for x in 0..12000 {
-                let daaaa = json.clone();
-                block_on(d.insert(format!("aaa{}", x), 1, daaaa));
-            }
-        });
-    
-        match cache.get(&String::from("adsasd0")).await {
-            Some(vec) => {
-                let value = &vec[0];
-                assert_eq!(value.to_string(), vc.to_string())
-            }
-            Some(v) => {
-                println!("{:?}", v);
-                assert_eq!(1, 0);
-            }
-            _ => assert_eq!(1, 0)
-        }
-    
-        std::thread::sleep(Duration::from_secs(60));
-        match cache.get(&String::from("adsasd0")).await {
-            Some(_) => assert_eq!(1, 0),
-            None => {}
-        }
-    
-        t1.join();
-        t2.join();
-    
-        println!("t1 & t2 completed");
-    
-        std::thread::sleep(Duration::from_secs(360));
-    
-        let t3 = thread::spawn(move || {
-            let _ = vec![
-                String::from("asd"),
-                String::from("hjk"),
-                String::from("poi"),
-            ];
-    
-            for x in 0i32..6000 {
-                let key = format!("aaa{}", x);
-    
-                match block_on(e.get(&key)) {
-                    None => {}
-                    _ => assert_eq!(1, 0),
-                }
-            }
-        });
-        let t4 = thread::spawn(move || {
-            let _ = vec![
-                String::from("asd"),
-                String::from("hjk"),
-                String::from("poi"),
-            ];
-    
-            for x in 6000i32..12000 {
-                let key = format!("aaa{}", x);
-    
-                match block_on(f.get(&key)) {
-                    None => {}
-                    _ => assert_eq!(1, 0),
-                }
-            }
-        });
-        t3.join();
-        t4.join();
-    
-        println!("t3 & t4 completed");
-    
-        while threads.len() > 0 {
-            threads.pop().unwrap().join();
-        }
-    
-        println!("silly threads completed");
-        std::thread::sleep(Duration::from_secs(5));
-    
-        for i in 0i32..1000 {
-            let fff = cache.clone();
-            let _ = vec![
-                String::from("asd"),
-                String::from("hjk"),
-                String::from("poi"),
-            ];
-    
-            for x in 0i32..10000 {
-                let c = if i % 2 == 0 { 10000 - x } else { x };
-    
-                match fff.get(&format!("1aaaddccc{}", c)).await {
-                    Some(_) => assert_eq!(1, 0),
-                    None => {}
-                };
-            }
-        }
-    
-        println!("clean up completed");
-        println!("It took {:?} seconds", start.elapsed().unwrap().as_secs());
-    
-        for i in 0..1000 {
-            let fff = cache.clone();
-            let _ = vec![
-                String::from("asd"),
-                String::from("hjk"),
-                String::from("poi"),
-            ];
-    
-            for x in 0..10000 {
-                let c = if i % 2 == 0 { 10000 - x } else { x };
-    
-                match fff.get(&format!("1aaaddccc{}", c)).await {
-                    Some(_) => assert_eq!(1, 0),
-                    None => {}
-                };
-            }
-        }
-        println!("double clean up completed");
     }
     
     #[test]
@@ -544,5 +333,221 @@ mod tests {
             }
         }
         return Ok(());
+    }
+
+    #[cfg(feature = "slow_tests")]
+    mod slow_tests {
+        use futures::executor::block_on;
+        use rand::Rng;
+        use std::time::Duration;
+        use std::thread;
+        use std::time::SystemTime;
+        use serde_json::Value;
+        use super::super::graphql;
+    
+        #[test]
+        fn test_cache_cleanup() -> () {
+            let cache = graphql::cache::MemoryCache::new();
+            let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
+        
+            block_on(cache.insert(format!("long_lasting"), 50000, json.clone()));
+            for i in 0..1000000 {
+                block_on(cache.insert(format!("xxxx{}", i), 1, json.clone()));
+            }
+        
+            std::thread::sleep(Duration::from_secs(5));
+        
+            // At this point, all entries have expired, apart from `long_lasting`
+
+            let c = cache.clone();
+            let thread = thread::spawn(move || {
+                let mut rng = rand::thread_rng();
+        
+                for _ in 0..1000000 {
+                    let i = rng.gen_range(0..1000000);
+                    let key = format!("xxxx{}", i);
+                    let v = c.get(&key);
+                    assert!(block_on(v).is_none());
+                }
+            });
+        
+            std::thread::sleep(Duration::from_secs(10));
+        
+            let key = format!("long_lasting");
+            let cache_entry = cache.get(&key);
+            assert!(block_on(cache_entry).is_some());
+        
+            assert!(thread.join().is_ok());
+        }
+        
+        #[tokio::test]
+        async fn test_cache() -> () {
+            let cache = graphql::cache::MemoryCache::new();
+        
+            let c = cache.clone();
+            let d = cache.clone();
+            let e = cache.clone();
+            let f = cache.clone();
+        
+            let vc: Value = serde_json::from_str(r#"{"a": 1234}"#).unwrap();
+            let vd: Value = serde_json::from_str(r#"{"a": 5555}"#).unwrap();
+        
+            let start = SystemTime::now();
+            block_on(cache.insert(String::from("adsasd0"), 010, vc.clone()));
+            block_on(cache.insert(String::from("adsasd1"), 123, vd.clone()));
+            block_on(cache.insert(String::from("adsasd2"), 123, vd.clone()));
+            block_on(cache.insert(String::from("adsasd3"), 123, vd.clone()));
+            block_on(cache.insert(String::from("adsasd4"), 123, vd.clone()));
+            block_on(cache.insert(String::from("adsasd5"), 123, vd.clone()));
+            block_on(cache.insert(String::from("adsasd6"), 123, vd.clone()));
+            block_on(cache.insert(String::from("adsasd7"), 123, vd.clone()));
+        
+            println!("{{ \"v\": 11 }}");
+        
+            let mut threads = Vec::new();
+            for i in 0..1000 {
+                let fff = cache.clone();
+                let ttt = thread::spawn(move || {
+                    let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
+        
+                    for x in 0i32..10000 {
+                        let c = if i % 2 == 0 { 10000 - x } else { x };
+        
+                        block_on(fff.insert(format!("1aaaddccc{}", c), 1, json.clone()));
+                        block_on(fff.insert(format!("1aaa{}{}", i, c), 100, json.clone()));
+        
+                        match block_on(fff.get(&format!("1aaa{}{}", i, c))) {
+                            Some(_) => {},
+                            None => assert_eq!(1, 0)
+                        };
+                    }
+                });
+        
+                threads.push(ttt);
+            }
+        
+            let t1 = thread::spawn(move || {
+                let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
+        
+                for x in 0..10000 {
+                    let daaaa = json.clone();
+                    block_on(c.insert(format!("aaa{}", x), 1, daaaa));
+                }
+            });
+        
+            let t2 = thread::spawn(move || {
+                let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
+        
+                for x in 0..12000 {
+                    let daaaa = json.clone();
+                    block_on(d.insert(format!("aaa{}", x), 1, daaaa));
+                }
+            });
+        
+            match cache.get(&String::from("adsasd0")).await {
+                Some(vec) => {
+                    let value = &vec[0];
+                    assert_eq!(value.to_string(), vc.to_string())
+                },
+                _ => assert_eq!(1, 0)
+            }
+        
+            std::thread::sleep(Duration::from_secs(60));
+            match cache.get(&String::from("adsasd0")).await {
+                Some(_) => assert_eq!(1, 0),
+                None => {}
+            }
+        
+            assert!(t1.join().is_ok());
+            assert!(t2.join().is_ok());
+        
+            println!("t1 & t2 completed");
+        
+            std::thread::sleep(Duration::from_secs(360));
+        
+            let t3 = thread::spawn(move || {
+                let _ = vec![
+                    String::from("asd"),
+                    String::from("hjk"),
+                    String::from("poi"),
+                ];
+        
+                for x in 0i32..6000 {
+                    let key = format!("aaa{}", x);
+        
+                    match block_on(e.get(&key)) {
+                        None => {}
+                        _ => assert_eq!(1, 0),
+                    }
+                }
+            });
+            let t4 = thread::spawn(move || {
+                let _ = vec![
+                    String::from("asd"),
+                    String::from("hjk"),
+                    String::from("poi"),
+                ];
+        
+                for x in 6000i32..12000 {
+                    let key = format!("aaa{}", x);
+        
+                    match block_on(f.get(&key)) {
+                        None => {}
+                        _ => assert_eq!(1, 0),
+                    }
+                }
+            });
+            assert!(t3.join().is_ok());
+            assert!(t4.join().is_ok());
+        
+            println!("t3 & t4 completed");
+        
+            while threads.len() > 0 {
+                assert!(threads.pop().unwrap().join().is_ok());
+            }
+        
+            println!("silly threads completed");
+            std::thread::sleep(Duration::from_secs(5));
+        
+            for i in 0i32..1000 {
+                let fff = cache.clone();
+                let _ = vec![
+                    String::from("asd"),
+                    String::from("hjk"),
+                    String::from("poi"),
+                ];
+        
+                for x in 0i32..10000 {
+                    let c = if i % 2 == 0 { 10000 - x } else { x };
+        
+                    match fff.get(&format!("1aaaddccc{}", c)).await {
+                        Some(_) => assert_eq!(1, 0),
+                        None => {}
+                    };
+                }
+            }
+        
+            println!("clean up completed");
+            println!("It took {:?} seconds", start.elapsed().unwrap().as_secs());
+        
+            for i in 0..1000 {
+                let fff = cache.clone();
+                let _ = vec![
+                    String::from("asd"),
+                    String::from("hjk"),
+                    String::from("poi"),
+                ];
+        
+                for x in 0..10000 {
+                    let c = if i % 2 == 0 { 10000 - x } else { x };
+        
+                    match fff.get(&format!("1aaaddccc{}", c)).await {
+                        Some(_) => assert_eq!(1, 0),
+                        None => {}
+                    };
+                }
+            }
+            println!("double clean up completed");
+        }
     }
 }
