@@ -5,7 +5,6 @@ mod graphql_deserializer;
 use auth::{authorize_header, get_oidc_config, AuthConfiguration, AuthHeader, AuthorizationType};
 use graphql::cache::Cache;
 use graphql::parser::serialize_operation;
-use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -13,8 +12,6 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::process::exit;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
 use warp::Filter;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]

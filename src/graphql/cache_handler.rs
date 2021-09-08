@@ -1,5 +1,5 @@
 use super::cache::Cache;
-use crate::graphql::json::{extract_mut, extract_mut_ren, merge_json};
+use crate::graphql::json::{extract_mut, merge_json};
 use crate::graphql::parser::{
     expand_operation, Error, Field, FragmentDefinition, Operation, OperationType, Parameter,
     ParameterValue, Traversable,
