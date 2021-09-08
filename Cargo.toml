@@ -12,7 +12,7 @@ tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "time"] }
 bytes = "0"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
-serde_json = "1.0"
+serde_json = { version = "*", features = ["preserve_order"] }
 chrono = "0"
 rand = "0"
 hyper = "0"
@@ -20,3 +20,7 @@ itertools = "0"
 reqwest = { version = "0", features = ["json", "rustls-tls"], default-features = false }
 redis = { version = "*", features = ["tokio-comp"] }
 futures = { version = "*" }
+jsonwebtoken = "*"
+
+[features]
+slow_tests = [] # This is only used to run slow tests. No effects on release code

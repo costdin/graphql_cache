@@ -5,13 +5,13 @@ use crate::graphql::parser::{
     ParameterValue, Traversable,
 };
 use crate::graphql_deserializer::{CacheHint, CacheScope, GraphQLResponse};
+use futures::future::join_all;
 use itertools::Itertools;
 use serde_json::map::Map;
 use serde_json::value::Value;
 use serde_json::{from_value, json};
 use std::collections::HashMap;
 use std::future::Future;
-use futures::future::join_all;
 
 /// Executes an operation against the cache.
 /// Any residual field (which couldn't be solved by the cache) is forwarded to the get_fn() function
@@ -24,7 +24,7 @@ pub async fn execute_operation<'a, F, Fut>(
     get_fn: F,
 ) -> Result<Value, Error>
 where
-    F: Fn(Operation<'a>, Map<String, Value>) -> Fut,
+    F: FnOnce(Operation<'a>, Map<String, Value>) -> Fut,
     Fut: Future<Output = (Result<Value, Error>, Operation<'a>, Map<String, Value>)>,
 {
     // If the operation is not a query, forward the whole document to the getfn() function
@@ -36,7 +36,8 @@ where
     // Replace all fragments with actual fields
     // Expanded operation does not contain any fragment
     let expanded_operation = expand_operation(operation, fragment_definitions)?;
-    let (residual_operation, data_from_cache) = match_operation_with_cache(expanded_operation, &variables, &user_id, &cache).await;
+    let (residual_operation, data_from_cache) =
+        match_operation_with_cache(expanded_operation, &variables, &user_id, &cache).await;
 
     match residual_operation {
         Some(operation) => {
@@ -45,26 +46,35 @@ where
             let (response, op, var) = get_fn(deduplicated_operation, variables).await;
             let result: GraphQLResponse = from_value(response?)?;
             let (mut response_data, hints) = result.compress_cache_hints();
-    
+
             update_cache(cache, &user_id, hints, &op, &var).await;
             merge_json(&mut response_data, data_from_cache);
 
             let final_result = expand_response(response_data, &op, &operation);
 
             Ok(json!({ "data": final_result }))
-        },
-        None => Ok(json!({ "data": data_from_cache }))
+        }
+        None => Ok(json!({ "data": data_from_cache })),
     }
 }
 
-fn expand_response(json: Value, deduplicated_operation: &Operation, operation: &Operation) -> Value {
+fn expand_response(
+    json: Value,
+    deduplicated_operation: &Operation,
+    operation: &Operation,
+) -> Value {
     let mut map = match json {
         Value::Object(map) => map,
-        _ => return json
+        _ => return json,
     };
 
     for f in operation.fields.iter() {
-        let df = deduplicated_operation.fields.iter().filter(|ff| ff.is_same_field(f)).nth(0).unwrap();
+        let df = deduplicated_operation
+            .fields
+            .iter()
+            .filter(|ff| ff.is_same_field(f))
+            .nth(0)
+            .unwrap();
         let v = map[df.get_alias()].clone();
 
         map.insert(f.get_alias().to_string(), expand_response_field(v, df, f));
@@ -76,11 +86,16 @@ fn expand_response(json: Value, deduplicated_operation: &Operation, operation: &
 fn expand_response_field(json: Value, deduplicated_field: &Field, field: &Field) -> Value {
     let mut map = match json {
         Value::Object(map) => map,
-        _ => return json
+        _ => return json,
     };
 
     for f in field.get_subfields().iter() {
-        let df = deduplicated_field.get_subfields().iter().filter(|ff| ff.is_same_field(f)).nth(0).unwrap();
+        let df = deduplicated_field
+            .get_subfields()
+            .iter()
+            .filter(|ff| ff.is_same_field(f))
+            .nth(0)
+            .unwrap();
         let v = map[df.get_alias()].clone();
 
         map.insert(f.get_alias().to_string(), expand_response_field(v, df, f));
@@ -132,18 +147,18 @@ fn get_cache_values<'a>(
     cacheable_fields
         .into_iter()
         .map(|fields| {
-            (fields
-            .iter()
-            .map(|f| field_to_cache_key(f, variables))
-            .collect::<Vec<String>>(),
-            fields) 
+            (
+                fields
+                    .iter()
+                    .map(|f| field_to_cache_key(f, variables))
+                    .collect::<Vec<String>>(),
+                fields,
+            )
         })
         .map(|(field_keys, fields)| {
             (
                 field_keys.join("+"),
-                extract_mut(
-                    &mut value,
-                    &fields_to_json_path(&fields)),
+                extract_mut(&mut value, &fields_to_json_path(&fields)),
                 fields,
             )
         })
@@ -165,8 +180,6 @@ fn dealias_fields(mut json_value: Value, path: &[&Field], variables: &Map<String
     json_value
 }
 
-
-
 fn dealias_path_recursive(json_value: &mut Value, path: &[&Field], variables: &Map<String, Value>) {
     let (current_field, path_remainder): (&Field, &[&Field]) = match path {
         [] => return,
@@ -177,7 +190,10 @@ fn dealias_path_recursive(json_value: &mut Value, path: &[&Field], variables: &M
         p => (*p.iter().nth(0).unwrap(), &p[1..]),
     };
 
-    let (name, alias) = (field_to_cache_key(current_field, variables), current_field.get_alias());
+    let (name, alias) = (
+        field_to_cache_key(current_field, variables),
+        current_field.get_alias(),
+    );
 
     let map = match json_value {
         Value::Object(map) => map,
@@ -190,7 +206,10 @@ fn dealias_path_recursive(json_value: &mut Value, path: &[&Field], variables: &M
 }
 
 fn dealias_field(json_value: &mut Value, current_field: &Field, variables: &Map<String, Value>) {
-    let (name, alias) = (field_to_cache_key(current_field, variables), current_field.get_alias());
+    let (name, alias) = (
+        field_to_cache_key(current_field, variables),
+        current_field.get_alias(),
+    );
 
     let map = match json_value {
         Value::Object(map) => map,
@@ -247,7 +266,8 @@ async fn match_operation_with_cache<'a>(
     let mut cached_result = Map::new();
     let mut cached_value = json!({});
 
-    let cache_keys = operation.fields
+    let cache_keys = operation
+        .fields
         .iter()
         .map(cacheable_fields)
         .flatten()
@@ -266,14 +286,16 @@ async fn match_operation_with_cache<'a>(
             None => {}
         }
     }
-    
+
     for field in operation.fields {
         let alias = String::from(field.get_alias());
         let v = cached_value.get(field_to_cache_key(&field, &variables));
 
         let (residual_field, cached_field) = match v {
-            Some(cached_value) => match_field_with_cache_recursive(field, &variables, Some(cached_value.clone())),
-            None => (Some(field), None)
+            Some(cached_value) => {
+                match_field_with_cache_recursive(field, &variables, Some(cached_value.clone()))
+            }
+            None => (Some(field), None),
         };
 
         match residual_field {

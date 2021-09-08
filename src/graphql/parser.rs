@@ -1,6 +1,6 @@
 mod tokenizer;
-use tokenizer::Tokenizer;
 use std::collections::HashSet;
+use tokenizer::Tokenizer;
 
 pub fn parse_query<'a>(query: &'a str) -> Result<Document<'a>, Error> {
     let mut operations = Vec::<Operation>::new();
@@ -247,7 +247,7 @@ pub fn expand_operation<'a>(
     }
 
     for field in operation.fields {
-        for f in expand_fragment(field, &fragment_definitions, &mut vec!())? {
+        for f in expand_fragment(field, &fragment_definitions, &mut vec![])? {
             new_fields.push(f);
         }
     }
@@ -263,26 +263,25 @@ pub fn expand_operation<'a>(
 fn expand_fragment<'a, 'b>(
     field: Field<'a>,
     fragments: &'b [FragmentDefinition<'a>],
-    fragment_stack: &mut Vec<&'b FragmentDefinition<'a>>
+    fragment_stack: &mut Vec<&'b FragmentDefinition<'a>>,
 ) -> Result<Vec<Field<'a>>, Error> {
     let fields = match field {
         Field::Fragment { name } => {
             let mut res = Vec::new();
-            let fragment = fragments
-                .iter()
-                .filter(|f| f.name == name)
-                .nth(0)
-                .unwrap();
+            let fragment = fragments.iter().filter(|f| f.name == name).nth(0).unwrap();
 
             if fragment_stack.contains(&fragment) {
                 return Err(Error::new("Recursive fragment structure".to_string()));
-            }    
-    
+            }
+
             fragment_stack.push(fragment);
 
-            for fragment_field in fragment.fields.iter()
-            {
-                res.append(&mut expand_fragment(fragment_field.clone(), fragments, fragment_stack)?);
+            for fragment_field in fragment.fields.iter() {
+                res.append(&mut expand_fragment(
+                    fragment_field.clone(),
+                    fragments,
+                    fragment_stack,
+                )?);
             }
 
             fragment_stack.pop();
@@ -812,8 +811,9 @@ pub struct FragmentDefinition<'a> {
 
 impl<'a> PartialEq for FragmentDefinition<'a> {
     fn eq(&self, other: &FragmentDefinition<'a>) -> bool {
-        return self.name == other.name && self.r#type == other.r#type
-    }}
+        return self.name == other.name && self.r#type == other.r#type;
+    }
+}
 
 #[derive(Debug)]
 pub struct Operation<'a> {
@@ -827,14 +827,15 @@ pub trait Traversable<'a> {
     fn traverse(&self, path: &[String]) -> Option<(Vec<&Field<'a>>, &Field<'a>)>;
 }
 
-impl<'a> Operation<'a> {    
+impl<'a> Operation<'a> {
     pub fn deduplicate_fields(&self) -> Result<Operation<'a>, Error> {
         let mut new_fields = Vec::new();
         new_fields.extend(self.fields.clone());
 
         let merged_fields = merge_subfields(new_fields);
         let residual_variable_names = get_variables(&merged_fields);
-        let residual_variables = self.variables
+        let residual_variables = self
+            .variables
             .iter()
             .filter(|v| residual_variable_names.contains(&v.name.to_string()))
             .map(|v| v.clone())
@@ -844,7 +845,7 @@ impl<'a> Operation<'a> {
             name: self.name.clone(),
             operation_type: self.operation_type,
             variables: residual_variables,
-            fields: merged_fields
+            fields: merged_fields,
         };
 
         Ok(op)
@@ -857,8 +858,10 @@ fn get_variables(fields: &[Field]) -> HashSet<String> {
     for f in fields {
         for p in f.get_parameters() {
             match &p.value {
-                ParameterValue::Variable(v) => { hash.insert(v.to_string()); },
-                _ => { }
+                ParameterValue::Variable(v) => {
+                    hash.insert(v.to_string());
+                }
+                _ => {}
             }
         }
 
@@ -946,11 +949,23 @@ impl<'a> Field<'a> {
 
     pub fn is_same_field(&self, field: &Field<'a>) -> bool {
         match (self, &field) {
-            (Field::Field{ name, parameters, ..}, &Field::Field{ name: name2, parameters: parameters2, ..}) => {
-                name == name2 && parameters.len() == parameters2.len()
-                    && parameters.iter().all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
-            },
-            _ => false
+            (
+                Field::Field {
+                    name, parameters, ..
+                },
+                &Field::Field {
+                    name: name2,
+                    parameters: parameters2,
+                    ..
+                },
+            ) => {
+                name == name2
+                    && parameters.len() == parameters2.len()
+                    && parameters
+                        .iter()
+                        .all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
+            }
+            _ => false,
         }
     }
 
@@ -969,13 +984,9 @@ impl<'a> Field<'a> {
         if self.get_name() == field.get_name() && self.has_same_parameters(field) {
             match (self, field) {
                 (
+                    Field::Field { ref mut fields, .. },
                     Field::Field {
-                        ref mut fields,
-                        ..
-                    },
-                    Field::Field {
-                        fields: fields2,
-                        ..
+                        fields: fields2, ..
                     },
                 ) => {
                     let mut subfields = Vec::new();
@@ -984,7 +995,7 @@ impl<'a> Field<'a> {
 
                     *fields = merge_subfields(subfields);
                 }
-                _ => { }
+                _ => {}
             }
         }
     }
@@ -1388,24 +1399,14 @@ mod tests {
             None,
             "field",
             vec![],
-            vec![Field::new_field(
-                None,
-                "subfield",
-                vec![],
-                vec![],
-            )],
+            vec![Field::new_field(None, "subfield", vec![], vec![])],
         );
 
         let field2 = Field::new_field(
             None,
             "field",
             vec![],
-            vec![Field::new_field(
-                None,
-                "subfield2",
-                vec![],
-                vec![],
-            )],
+            vec![Field::new_field(None, "subfield2", vec![], vec![])],
         );
 
         field1.merge(&field2);
@@ -1479,12 +1480,7 @@ mod tests {
                     None,
                     "subfield2",
                     vec![],
-                    vec![Field::new_field(
-                        None,
-                        "subsubfield5",
-                        vec![],
-                        vec![],
-                    )],
+                    vec![Field::new_field(None, "subsubfield5", vec![], vec![])],
                 ),
             ],
         );
@@ -1582,12 +1578,7 @@ mod tests {
                     None,
                     "subfield2",
                     vec![],
-                    vec![Field::new_field(
-                        None,
-                        "subsubfield6",
-                        vec![],
-                        vec![],
-                    )],
+                    vec![Field::new_field(None, "subsubfield6", vec![], vec![])],
                 ),
             ],
         );
@@ -1613,12 +1604,7 @@ mod tests {
                     None,
                     "subfield2",
                     vec![],
-                    vec![Field::new_field(
-                        None,
-                        "subsubfield5",
-                        vec![],
-                        vec![],
-                    )],
+                    vec![Field::new_field(None, "subsubfield5", vec![], vec![])],
                 ),
             ],
         );

@@ -18,5 +18,6 @@ $FILE_NAME="graphql_cache_" + $BRANCH
 $PATH="rasp-target/graphql_cache_" + $BRANCH
 
 scp bitnami@192.168.1.186:~/graphql_cache/target/arm-unknown-linux-musleabi/release/graphql_cache $PATH
+ssh pi@192.168.1.50 "killall ${FILE_NAME}; killall ./${FILE_NAME}"
 scp $PATH pi@192.168.1.50:~/$FILE_NAME
-ssh pi@192.168.1.50 "killall ${FILE_NAME}; chmod a+x ${FILE_NAME} && ./${FILE_NAME}"
+ssh pi@192.168.1.50 "chmod a+x ${FILE_NAME} && ./${FILE_NAME}"

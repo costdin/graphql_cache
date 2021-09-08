@@ -36,7 +36,11 @@ pub fn extract_mut(json_value: &mut Value, path: &[String]) -> Option<Value> {
     }
 }
 
-pub fn extract_mut_ren(json_value: &mut Value, path: &[String], new_names: &[String]) -> Option<Value> {
+pub fn extract_mut_ren(
+    json_value: &mut Value,
+    path: &[String],
+    new_names: &[String],
+) -> Option<Value> {
     if path.len() == 1 {
         match json_value {
             Value::Object(v) => match v.remove(&path[0]) {
