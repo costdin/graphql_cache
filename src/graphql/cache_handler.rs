@@ -228,6 +228,22 @@ fn dealias_field(json_value: &mut Value, current_field: &Field, variables: &Map<
     }
 }
 
+///
+/// Splits a field into cacheable fields. A cacheable field
+/// is a field that can be contained in a single cache entry.
+/// If a subfield has a parameter, it can't be contained in its
+/// parent's field, because a subfield may be queried using
+/// different parameters:
+/// 
+/// { company(id: 12) { name subsidiary(id: 13) { name } } }
+/// { company(id: 12) { name subsidiary(id: 14) { name } } }
+/// 
+/// so company.subsidiary can't be in the same cacheable block
+/// as its parent.
+/// 
+/// The path of a cacheable field is the list of fields that are
+/// traversed to reach it. This is represented as a Vec of fields.
+/// 
 fn cacheable_fields<'a>(field: &'a Field<'a>) -> Vec<Vec<&'a Field<'a>>> {
     let mut stack = vec![field];
     let mut result = vec![stack.clone()];
@@ -239,6 +255,7 @@ fn cacheable_fields<'a>(field: &'a Field<'a>) -> Vec<Vec<&'a Field<'a>>> {
     result
 }
 
+/// A recursive function used by cacheable_fields
 fn cacheable_fields_int<'a>(
     field: &'a Field<'a>,
     stack: &mut Vec<&'a Field<'a>>,
@@ -718,6 +735,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_operation_doesnt_send_request_if_all_fields_are_cached_and_aliased_with_parameters() {
+        let cache = create_cache();
+
+        let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
+        let query2 = "{aliased_field1: field1{aliased_subfield1: subfield1 the_alias: subfield3(id: 13)}}";
+
+        let parsed_query = parse_query(query).unwrap();
+        let parsed_query2 = parse_query(query2).unwrap();
+
+        let result1 = execute_operation(
+            parsed_query.operations.into_iter().nth(0).unwrap(),
+            parsed_query.fragment_definitions,
+            Map::new(),
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_send_request,
+        )
+        .await
+        .unwrap();
+
+        let result2 = execute_operation(
+            parsed_query2.operations.into_iter().nth(0).unwrap(),
+            parsed_query2.fragment_definitions,
+            Map::new(),
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_not_called_send_request,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result1,
+            json!({"data":{"field1":{"subfield1":55,"subfield2":777,"aliased_subfield":123,"aliased_private_subfield":111}}})
+        );
+        assert_eq!(
+            result2,
+            json!({"data":{"aliased_field1":{"aliased_subfield1":55, "the_alias": 123}}})
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_operation_send_request_if_subfield_has_different_parameter() {
+        let cache = create_cache();
+
+        let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
+        let query2 = "{aliased_field1: field1{aliased_subfield1: subfield1 the_alias: subfield3(id: 15)}}";
+
+        let parsed_query = parse_query(query).unwrap();
+        let parsed_query2 = parse_query(query2).unwrap();
+
+        let result1 = execute_operation(
+            parsed_query.operations.into_iter().nth(0).unwrap(),
+            parsed_query.fragment_definitions,
+            Map::new(),
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_send_request,
+        )
+        .await
+        .unwrap();
+
+        let result2 = execute_operation(
+            parsed_query2.operations.into_iter().nth(0).unwrap(),
+            parsed_query2.fragment_definitions,
+            Map::new(),
+            cache.clone(),
+            Some(String::from("u1")),
+            fake_send_request_new_param,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result1,
+            json!({"data":{"field1":{"subfield1":55,"subfield2":777,"aliased_subfield":123,"aliased_private_subfield":111}}})
+        );
+        assert_eq!(
+            result2,
+            json!({"data":{"aliased_field1":{"aliased_subfield1":55, "the_alias": 999}}})
+        );
+    }
+
+    #[tokio::test]
     async fn execute_operation_does_not_get_value_from_private_caches_for_different_users() {
         let cache = create_cache();
 
@@ -972,6 +1073,34 @@ mod tests {
                                 "path": ["field1", "aliased_private_subfield"],
                                 "maxAge": 1000,
                                 "scope": "PRIVATE"
+                            }
+                        ]
+                    }
+                }
+            }
+        ));
+
+        (result, document, variables)
+    }
+
+    async fn fake_send_request_new_param<'a>(
+        document: Operation<'a>,
+        variables: Map<String, Value>,
+    ) -> (Result<Value, Error>, Operation<'a>, Map<String, Value>) {
+        let result = Ok(json!(
+            {
+                "data": {
+                    "aliased_field1": {
+                        "the_alias": 999
+                    }
+                },
+                "extensions": {
+                    "cacheControl": {
+                        "version": 1,
+                        "hints": [
+                            {
+                                "path": ["field1"],
+                                "maxAge": 2000
                             }
                         ]
                     }

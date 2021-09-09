@@ -11,6 +11,18 @@
             "cwd": "${workspaceRoot}",
             "environment": [],
             "externalConsole": true
+        },
+        {
+            "name": "Run Test Debugger",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/target/debug/deps/graphql_cache-f32169718d507849.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceRoot}",
+            "environment": [],
+            "externalConsole": true,
+            //"preLaunchTask": "cargo test build",
         }
     ]
 }
