@@ -234,16 +234,16 @@ fn dealias_field(json_value: &mut Value, current_field: &Field, variables: &Map<
 /// If a subfield has a parameter, it can't be contained in its
 /// parent's field, because a subfield may be queried using
 /// different parameters:
-/// 
+///
 /// { company(id: 12) { name subsidiary(id: 13) { name } } }
 /// { company(id: 12) { name subsidiary(id: 14) { name } } }
-/// 
+///
 /// so company.subsidiary can't be in the same cacheable block
 /// as its parent.
-/// 
+///
 /// The path of a cacheable field is the list of fields that are
 /// traversed to reach it. This is represented as a Vec of fields.
-/// 
+///
 fn cacheable_fields<'a>(field: &'a Field<'a>) -> Vec<Vec<&'a Field<'a>>> {
     let mut stack = vec![field];
     let mut result = vec![stack.clone()];
@@ -342,51 +342,6 @@ async fn match_operation_with_cache<'a>(
     };
 
     (residual_operation, Value::Object(cached_result))
-}
-
-async fn match_field_with_cache<'a>(
-    field: Field<'a>,
-    variables: &Map<String, Value>,
-    user_id: &Option<String>,
-    cache: &Cache,
-) -> (Option<Field<'a>>, Option<Value>) {
-    let mut cached_value = json!({});
-
-    /* This seems to be slower (or at least make more allocations)
-    let keys: Vec<_> = cacheable_fields(&field)
-        .iter()
-        .map(|cf| fields_to_cache_key(&cf, &variables))
-        .collect();
-
-    let lambdaz = keys
-        .iter()
-        .map(|k| get_cached_item(&k, &user_id, &cache));
-
-    for item in join_all(lambdaz).await {
-        match item {
-            Some(x) => merge_json(&mut cached_value, x),
-            None => {}
-        }
-    }
-    */
-
-    for cf in cacheable_fields(&field) {
-        match get_cached_item(&fields_to_cache_key(&cf, &variables), &user_id, &cache).await {
-            Some(x) => merge_json(&mut cached_value, x),
-            None => {}
-        };
-    }
-
-    match cached_value {
-        Value::Object(mut map) => {
-            if let Some(root) = map.remove(field.get_name()) {
-                match_field_with_cache_recursive(field, &variables, Some(root))
-            } else {
-                (Some(field), None)
-            }
-        }
-        _ => (Some(field), None),
-    }
 }
 
 fn match_field_with_cache_recursive<'a>(
@@ -735,11 +690,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_operation_doesnt_send_request_if_all_fields_are_cached_and_aliased_with_parameters() {
+    async fn execute_operation_doesnt_send_request_if_all_fields_are_cached_and_aliased_with_parameters(
+    ) {
         let cache = create_cache();
 
         let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
-        let query2 = "{aliased_field1: field1{aliased_subfield1: subfield1 the_alias: subfield3(id: 13)}}";
+        let query2 =
+            "{aliased_field1: field1{aliased_subfield1: subfield1 the_alias: subfield3(id: 13)}}";
 
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query2).unwrap();
@@ -781,7 +738,8 @@ mod tests {
         let cache = create_cache();
 
         let query = "{field1{subfield1 subfield2 aliased_subfield: subfield3(id: 13) aliased_private_subfield: subfield3(id: 11)}}";
-        let query2 = "{aliased_field1: field1{aliased_subfield1: subfield1 the_alias: subfield3(id: 15)}}";
+        let query2 =
+            "{aliased_field1: field1{aliased_subfield1: subfield1 the_alias: subfield3(id: 15)}}";
 
         let parsed_query = parse_query(query).unwrap();
         let parsed_query2 = parse_query(query2).unwrap();

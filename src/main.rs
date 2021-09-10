@@ -179,9 +179,9 @@ async fn stuff(
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
-    use super::graphql_deserializer::{CacheScope, GraphQLResponse};
     use super::graphql;
+    use super::graphql_deserializer::{CacheScope, GraphQLResponse};
+    use futures::executor::block_on;
     use serde_json::Value;
 
     #[test]
@@ -193,54 +193,54 @@ mod tests {
         let stri = "                          {    field1  (p1 :                         1,         p2:\"as        \\\"      d              \"    )     {      subf1      subf2(  p3   :0)   { s     } }}      ";
         let rezult = graphql::parser::parse_query(stri);
         assert!(rezult.is_ok());
-    
+
         let stri2 = "{ggggg: field1(p1:{v1:1,v2:\"2\",v3:{vv3:33},v4:[12,13,15]},p2:\"as        \\\"      d              \"){f1: subf1 subf2(p3:0){s}}, cccc: field1(p1:1){subf1}}";
         let rezult2 = graphql::parser::parse_query(stri2);
         assert!(rezult2.is_ok());
-    
+
         let stri3 = "query TheQuery($p1: Int = 10){alias1: field1(id: $p1) { id, name } }";
         let rezult3 = graphql::parser::parse_query(stri3);
         assert!(rezult3.is_ok());
-    
+
         let stri4 = "query TheQuery($p1: Int = 10){alias1: field1(id: $p1) { id, name } alias2: field2(id: $p1, name: \"the name\") { id name } }";
         let rezult4 = graphql::parser::parse_query(stri4);
         assert!(rezult4.is_ok());
-    
+
         let stri5 = "query TheQuery($p1: Int = 10){alias1: field1(id: $p1) { id, name } alias2: field2(id: $p1, name: \"the name\") { id name } } query TheSecondQuery($p1: Int = 20){alias1: field1(id: $p1) { id, name surname } alias2: field2(id: $p1, name: \"the second name\") { id name surname } }";
         let rezult5 = graphql::parser::parse_query(stri5);
         assert!(rezult5.is_ok());
-    
+
         let stri6 = "query TheQuery{alias1: field1(id: $p1) { id, name } alias2: field2(id: $p1, name: \"the name\") { id name } } query TheSecondQuery($p1: Int = 20){alias1: field1(id: $p1) { id, name surname } alias2: field2(id: $p1, name: \"the second name\") { id name surname } }";
         let rezult6 = graphql::parser::parse_query(stri6);
         assert!(rezult6.is_ok());
-    
+
         let stri7 = "query TheQuery{alias1: field1(id: $p1) { dob ...userFragment } alias2: field2(id: $p1, name: \"the name\") {...userFragment } } query TheSecondQuery($p1: Int = 20){alias1: field1(id: $p1) {...userFragment surname } alias2: field2(id: $p1, name: \"the second name\") {...userFragment surname } } fragment userFragment on User { id name }";
         let rezult7 = graphql::parser::parse_query(stri7);
         assert!(rezult7.is_ok());
-    
+
         let stri8 = "{field1(p1:1,p2:\"as              d              \"){subf1 subf2(p3:0){s}}}";
         let result8 = graphql::parser::parse_query(stri8);
         assert!(result8.is_ok());
-    
+
         let stri9 = "  {    field1 (    p1 : 1   ,  p2    :   \"asd\" ) {    subf1   subf2   (    p3 :  0 )   {   s  }  }    } ";
         let result9 = graphql::parser::parse_query(stri9);
         assert!(result9.is_ok());
     }
-    
+
     #[tokio::test]
     async fn test_cache_small() -> () {
         let cache = graphql::cache::MemoryCache::new();
         let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
-    
+
         block_on(cache.insert(format!("1aaaddccc{}", 0), 10000, json.clone()));
         block_on(cache.insert(format!("1aaa{}{}", 1, 0), 10000, json.clone()));
-    
+
         match cache.get(&format!("1aaa{}{}", 1, 0)).await {
             Some(_) => {}
-            None => assert_eq!(1, 0)
+            None => assert_eq!(1, 0),
         };
     }
-    
+
     #[test]
     fn test_deserializer() -> serde_json::Result<()> {
         let data = r#"
@@ -309,24 +309,27 @@ mod tests {
                 }
             }
         }"#;
-    
+
         let result: GraphQLResponse = serde_json::from_str(data)?;
         let _ = std::collections::HashMap::<String, Value>::new();
         let cache = graphql::cache::MemoryCache::new();
-    
+
         let (response_data, hints) = result.compress_cache_hints();
-    
+
         let field_name: String = match response_data {
             Value::Object(m) => m.keys().into_iter().nth(0).unwrap().clone(),
-            _ => { assert_eq!(1, 0); "".to_owned() },
+            _ => {
+                assert_eq!(1, 0);
+                "".to_owned()
+            }
         };
-    
+
         for (value, hint) in hints {
             match (hint.scope, hint.max_age) {
                 (CacheScope::PUBLIC, duration) => {
                     println!("{:#?}", hint);
                     println!("{:#?}", value);
-    
+
                     block_on(cache.insert(field_name.clone(), duration, value));
                 }
                 _ => {}
@@ -337,32 +340,32 @@ mod tests {
 
     #[cfg(feature = "slow_tests")]
     mod slow_tests {
+        use super::super::graphql;
         use futures::executor::block_on;
         use rand::Rng;
-        use std::time::Duration;
-        use std::thread;
-        use std::time::SystemTime;
         use serde_json::Value;
-        use super::super::graphql;
-    
+        use std::thread;
+        use std::time::Duration;
+        use std::time::SystemTime;
+
         #[test]
         fn test_cache_cleanup() -> () {
             let cache = graphql::cache::MemoryCache::new();
             let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
-        
+
             block_on(cache.insert(format!("long_lasting"), 50000, json.clone()));
             for i in 0..1000000 {
                 block_on(cache.insert(format!("xxxx{}", i), 1, json.clone()));
             }
-        
+
             std::thread::sleep(Duration::from_secs(5));
-        
+
             // At this point, all entries have expired, apart from `long_lasting`
 
             let c = cache.clone();
             let thread = thread::spawn(move || {
                 let mut rng = rand::thread_rng();
-        
+
                 for _ in 0..1000000 {
                     let i = rng.gen_range(0..1000000);
                     let key = format!("xxxx{}", i);
@@ -370,28 +373,28 @@ mod tests {
                     assert!(block_on(v).is_none());
                 }
             });
-        
+
             std::thread::sleep(Duration::from_secs(10));
-        
+
             let key = format!("long_lasting");
             let cache_entry = cache.get(&key);
             assert!(block_on(cache_entry).is_some());
-        
+
             assert!(thread.join().is_ok());
         }
-        
+
         #[tokio::test]
         async fn test_cache() -> () {
             let cache = graphql::cache::MemoryCache::new();
-        
+
             let c = cache.clone();
             let d = cache.clone();
             let e = cache.clone();
             let f = cache.clone();
-        
+
             let vc: Value = serde_json::from_str(r#"{"a": 1234}"#).unwrap();
             let vd: Value = serde_json::from_str(r#"{"a": 5555}"#).unwrap();
-        
+
             let start = SystemTime::now();
             block_on(cache.insert(String::from("adsasd0"), 010, vc.clone()));
             block_on(cache.insert(String::from("adsasd1"), 123, vd.clone()));
@@ -401,80 +404,80 @@ mod tests {
             block_on(cache.insert(String::from("adsasd5"), 123, vd.clone()));
             block_on(cache.insert(String::from("adsasd6"), 123, vd.clone()));
             block_on(cache.insert(String::from("adsasd7"), 123, vd.clone()));
-        
+
             println!("{{ \"v\": 11 }}");
-        
+
             let mut threads = Vec::new();
             for i in 0..1000 {
                 let fff = cache.clone();
                 let ttt = thread::spawn(move || {
                     let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
-        
+
                     for x in 0i32..10000 {
                         let c = if i % 2 == 0 { 10000 - x } else { x };
-        
+
                         block_on(fff.insert(format!("1aaaddccc{}", c), 1, json.clone()));
                         block_on(fff.insert(format!("1aaa{}{}", i, c), 100, json.clone()));
-        
+
                         match block_on(fff.get(&format!("1aaa{}{}", i, c))) {
-                            Some(_) => {},
-                            None => assert_eq!(1, 0)
+                            Some(_) => {}
+                            None => assert_eq!(1, 0),
                         };
                     }
                 });
-        
+
                 threads.push(ttt);
             }
-        
+
             let t1 = thread::spawn(move || {
                 let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
-        
+
                 for x in 0..10000 {
                     let daaaa = json.clone();
                     block_on(c.insert(format!("aaa{}", x), 1, daaaa));
                 }
             });
-        
+
             let t2 = thread::spawn(move || {
                 let json: Value = serde_json::from_str("{ \"v\": 11 }").unwrap();
-        
+
                 for x in 0..12000 {
                     let daaaa = json.clone();
                     block_on(d.insert(format!("aaa{}", x), 1, daaaa));
                 }
             });
-        
+
             match cache.get(&String::from("adsasd0")).await {
                 Some(vec) => {
                     let value = &vec[0];
                     assert_eq!(value.to_string(), vc.to_string())
-                },
-                _ => assert_eq!(1, 0)
+                }
+                _ => assert_eq!(1, 0),
             }
-        
+
             std::thread::sleep(Duration::from_secs(60));
             match cache.get(&String::from("adsasd0")).await {
                 Some(_) => assert_eq!(1, 0),
                 None => {}
             }
-        
+
             assert!(t1.join().is_ok());
             assert!(t2.join().is_ok());
-        
+
             println!("t1 & t2 completed");
-        
+
             std::thread::sleep(Duration::from_secs(360));
-        
+
             let t3 = thread::spawn(move || {
                 let _ = vec![
                     String::from("asd"),
                     String::from("hjk"),
                     String::from("poi"),
                 ];
-        
+
                 for x in 0i32..6000 {
                     let key = format!("aaa{}", x);
-        
+
                     match block_on(e.get(&key)) {
                         None => {}
                         _ => assert_eq!(1, 0),
@@ -487,10 +490,10 @@ mod tests {
                     String::from("hjk"),
                     String::from("poi"),
                 ];
-        
+
                 for x in 6000i32..12000 {
                     let key = format!("aaa{}", x);
-        
+
                     match block_on(f.get(&key)) {
                         None => {}
                         _ => assert_eq!(1, 0),
@@ -499,16 +502,16 @@ mod tests {
             });
             assert!(t3.join().is_ok());
             assert!(t4.join().is_ok());
-        
+
             println!("t3 & t4 completed");
-        
+
             while threads.len() > 0 {
                 assert!(threads.pop().unwrap().join().is_ok());
             }
-        
+
             println!("silly threads completed");
             std::thread::sleep(Duration::from_secs(5));
-        
+
             for i in 0i32..1000 {
                 let fff = cache.clone();
                 let _ = vec![
@@ -516,20 +519,20 @@ mod tests {
                     String::from("hjk"),
                     String::from("poi"),
                 ];
-        
+
                 for x in 0i32..10000 {
                     let c = if i % 2 == 0 { 10000 - x } else { x };
-        
+
                     match fff.get(&format!("1aaaddccc{}", c)).await {
                         Some(_) => assert_eq!(1, 0),
                         None => {}
                     };
                 }
             }
-        
+
             println!("clean up completed");
             println!("It took {:?} seconds", start.elapsed().unwrap().as_secs());
-        
+
             for i in 0..1000 {
                 let fff = cache.clone();
                 let _ = vec![
@@ -537,10 +540,10 @@ mod tests {
                     String::from("hjk"),
                     String::from("poi"),
                 ];
-        
+
                 for x in 0..10000 {
                     let c = if i % 2 == 0 { 10000 - x } else { x };
-        
+
                     match fff.get(&format!("1aaaddccc{}", c)).await {
                         Some(_) => assert_eq!(1, 0),
                         None => {}

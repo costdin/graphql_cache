@@ -949,34 +949,23 @@ impl<'a> Field<'a> {
 
     pub fn is_same_field(&self, field: &Field<'a>) -> bool {
         match (self, &field) {
-            (
-                Field::Field {
-                    name, parameters, ..
-                },
-                &Field::Field {
-                    name: name2,
-                    parameters: parameters2,
-                    ..
-                },
-            ) => {
-                name == name2
-                    && parameters.len() == parameters2.len()
-                    && parameters
-                        .iter()
-                        .all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
+            (Field::Field { name, .. }, &Field::Field { name: name2, .. }) => {
+                name == name2 && self.has_same_parameters(field)
             }
             _ => false,
         }
     }
 
-    // TODO: This can be optimized
     fn has_same_parameters(&self, field: &Field<'a>) -> bool {
         if self.get_parameters().len() != field.get_parameters().len() {
             false
         } else {
-            self.get_parameters()
-                .iter()
-                .all(|p1| field.get_parameters().iter().any(|p2| p1 == p2))
+            let mut hashmap = HashSet::new();
+            for p in field.get_parameters().iter() {
+                hashmap.insert(p);
+            }
+
+            self.get_parameters().iter().all(|p1| hashmap.contains(p1))
         }
     }
 
@@ -1078,13 +1067,13 @@ impl<'a> Field<'a> {
 static EMPTY_PARAMETER_LIST: &'static [Parameter] = &[];
 static EMPTY_FIELD_LIST: &'static [Field] = &[];
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Parameter<'a> {
     pub name: &'a str,
     pub value: ParameterValue<'a>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ParameterValue<'a> {
     Nil,
     Scalar(&'a str),
@@ -1100,7 +1089,7 @@ pub enum OperationType {
     Subscription,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParameterField<'a> {
     name: &'a str,
     value: ParameterValue<'a>,
