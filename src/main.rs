@@ -3,41 +3,67 @@ mod graphql;
 mod graphql_deserializer;
 
 use auth::{authorize_header, get_oidc_config, AuthConfiguration, AuthHeader, AuthorizationType};
+use clap::Parser;
 use graphql::cache::Cache;
 use graphql::parser::serialize_operation;
+use serde::Deserialize;
+use serde_json;
 use serde_json::Map;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::fs;
 use std::net::SocketAddr;
 use std::process::exit;
+use std::str::FromStr;
 use std::sync::Arc;
 use warp::Filter;
 
+#[derive(Parser)]
+struct CliArguments {
+    config: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Config {
+    redis_connection_string: String,
+    oidc_configuration_endpoint: String,
+    oidc_token_header: String,
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() {
+    let args = CliArguments::parse();
+    let config_path = args
+        .config
+        .unwrap_or(std::path::PathBuf::from_str("./etc/config.json").unwrap());
+
+    let file_content = fs::read_to_string(config_path).expect("Unable to read file");
+    let config: Config = serde_json::from_str(&file_content).expect("Unable to parse");
+
     #[cfg(not(test))]
-    let cache = match Cache::new("redis://u0:pass@192.168.1.186").await {
-        Ok(c) => c,
-        _ => return,
-    };
+    let cache = Cache::new(&config.redis_connection_string)
+        .await
+        .expect("Error initializing cache");
     #[cfg(test)]
     let cache = Cache::new();
 
-    let header_name = "x-auth";
+    // We must leak the Box in order to get a `&'static str` borrow
+    // `warp::header` requires the header name to be passed as a `&'static str`
+    let header_name: &'static str = Box::leak(config.oidc_token_header.into_boxed_str());
 
-    let auth_configuration = match get_oidc_config(
-        "https://auth.reedexpo.com/secure/.well-known/openid-configuration",
-        header_name,
-    )
-    .await
-    {
-        Ok(auth_configuration) => auth_configuration,
-        _ => AuthConfiguration {
-            authorization_header: header_name,
-            authorization_type: AuthorizationType::Simple,
-        },
-    };
+    let auth_configuration =
+        match get_oidc_config(&config.oidc_configuration_endpoint, header_name).await {
+            Ok(auth_configuration) => auth_configuration,
+            _ => {
+                println!("Invalid OIDC configuration, fallback to simple auth");
+
+                AuthConfiguration {
+                    authorization_header: header_name,
+                    authorization_type: AuthorizationType::Simple,
+                }
+            }
+        };
 
     let end = warp::path("end").and_then(end);
     let endpoint = warp::path("hello")

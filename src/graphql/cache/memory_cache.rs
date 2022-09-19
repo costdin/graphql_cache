@@ -1,4 +1,4 @@
-//use super::cache::Cache;
+use super::error::CacheError;
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
 use serde_json::Value;
@@ -22,8 +22,13 @@ impl MemoryCache {
         }
     }
 
-    pub async fn insert(&self, key: String, duration_seconds: u16, value: Value) {
-        self.inner_cache.insert(key, duration_seconds, value);
+    pub async fn insert(
+        &self,
+        key: String,
+        duration_seconds: u16,
+        value: Value,
+    ) -> Result<(), CacheError> {
+        self.inner_cache.insert(key, duration_seconds, value)
     }
 
     pub async fn get(&self, key: &String) -> Option<Vec<Value>> {
@@ -216,7 +221,7 @@ impl<K: 'static + Hash + Eq + Send + Sync, T: 'static + Sync + Send> InnerCache<
         });
     }
 
-    pub fn insert(&self, key: K, duration_seconds: u16, value: T) {
+    pub fn insert(&self, key: K, duration_seconds: u16, value: T) -> Result<(), CacheError> {
         let now = Utc::now();
         let expiry_date = now + Duration::seconds(duration_seconds.try_into().unwrap());
 
@@ -238,6 +243,8 @@ impl<K: 'static + Hash + Eq + Send + Sync, T: 'static + Sync + Send> InnerCache<
         };
 
         self.write_ops.fetch_add(1, Ordering::Relaxed);
+
+        Ok(())
     }
 
     pub fn get(&self, key: &K) -> Option<Vec<Arc<T>>> {

@@ -1,3 +1,4 @@
+use super::error::CacheError;
 use ::redis::aio::MultiplexedConnection;
 use chrono::Utc;
 use redis::AsyncCommands;
@@ -11,7 +12,7 @@ pub struct RedisCache {
 }
 
 impl RedisCache {
-    pub async fn new(url: &str) -> Result<RedisCache, RedisCacheError> {
+    pub async fn new(url: &str) -> Result<RedisCache, CacheError> {
         let client = redis::Client::open(url)?;
         let connection = client.get_multiplexed_async_connection().await?;
 
@@ -24,8 +25,13 @@ impl RedisCache {
         })
     }
 
-    pub async fn insert(&self, key: String, duration_seconds: u16, value: Value) {
-        self.inner_cache.insert(key, duration_seconds, value).await;
+    pub async fn insert(
+        &self,
+        key: String,
+        duration_seconds: u16,
+        value: Value,
+    ) -> Result<(), CacheError> {
+        self.inner_cache.insert(key, duration_seconds, value).await
     }
 
     pub async fn get(&self, key: &String) -> Option<Vec<Value>> {
@@ -59,13 +65,9 @@ struct InternalCacheItem {
     pub value: Value,
 }
 
-pub enum RedisCacheError {
-    CreateError,
-}
-
-impl From<RedisError> for RedisCacheError {
-    fn from(_err: RedisError) -> RedisCacheError {
-        RedisCacheError::CreateError
+impl From<RedisError> for CacheError {
+    fn from(err: RedisError) -> CacheError {
+        CacheError::CreateError(format!("{:#?}", err))
     }
 }
 
@@ -75,7 +77,7 @@ impl InternalRedisCache {
         key: String,
         duration_seconds: u16,
         value: Value,
-    ) -> Result<(), RedisCacheError> {
+    ) -> Result<(), CacheError> {
         let now: isize = Utc::now().timestamp().try_into().unwrap();
         let offset: isize = duration_seconds.try_into().unwrap();
         let score = now + offset;
@@ -91,7 +93,7 @@ impl InternalRedisCache {
         Ok(())
     }
 
-    async fn get(&self, key: &String) -> Result<Option<Vec<Value>>, RedisCacheError> {
+    async fn get(&self, key: &String) -> Result<Option<Vec<Value>>, CacheError> {
         let now: isize = Utc::now().timestamp().try_into().unwrap();
         let (_del_result, get_result): (redis::Value, Vec<String>) = redis::pipe()
             .zrembyscore(key, 0isize, now)

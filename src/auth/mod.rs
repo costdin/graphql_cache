@@ -25,10 +25,11 @@ pub struct KeyDocument {
 }
 
 pub enum AuthorizationType {
-    Jwt(KeyDocument),
+    Jwt(Vec<DecodingKey>),
     Simple,
 }
 
+#[derive(Debug)]
 pub struct AuthHeader {
     pub sub: String,
     pub header: String,
@@ -53,27 +54,25 @@ pub fn authorize_header(
                 sub: v.clone(),
                 header: v,
             }),
-            (Some(v), AuthorizationType::Jwt(key_document)) => {
-                if let Some(token) = v.split_whitespace().skip(1).nth(0) {
-                    match decode::<Claims>(
-                        &token,
-                        &DecodingKey::from_rsa_components(
-                            &key_document.keys[0].n,
-                            &key_document.keys[0].e,
-                        ),
-                        &Validation::new(Algorithm::RS256),
-                    ) {
-                        Ok(token) => Some(AuthHeader {
-                            sub: token.claims.sub,
-                            header: v,
-                        }),
-                        Err(_) => None,
-                    }
-                } else {
-                    None
+            (Some(v), AuthorizationType::Jwt(keys)) => {
+                let mut splitted = v.split_whitespace();
+                match (splitted.next(), splitted.next()) {
+                    (Some("Bearer"), Some(token)) => {
+                        match decode::<Claims>(&token, &keys[0], &Validation::new(Algorithm::RS256)) {
+                            Ok(token) => Some(AuthHeader {
+                                sub: token.claims.sub,
+                                header: v,
+                            }),
+                            Err(e) => {
+                                println!("Error: {}", e);
+                                None
+                            },    
+                        }
+                    },
+                    _ => None 
                 }
             }
-            _ => None,
+            (None, _) => None,
         },
     )
 }
@@ -112,8 +111,15 @@ pub async fn get_oidc_config(
 ) -> Result<AuthConfiguration, Error> {
     let key_document = get_jwks(discovery_document_url).await?;
 
+    let keys = key_document
+        .keys
+        .iter()
+        .filter(|k| k.r#use == "sig" && k.kty == "RSA")
+        .filter_map(|k| DecodingKey::from_rsa_components(&k.n, &k.e).ok())
+        .collect::<Vec<_>>();
+
     Ok(AuthConfiguration {
-        authorization_type: AuthorizationType::Jwt(key_document),
+        authorization_type: AuthorizationType::Jwt(keys),
         authorization_header: header_name,
     })
 }

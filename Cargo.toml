@@ -21,6 +21,7 @@ reqwest = { version = "0", features = ["json", "rustls-tls"], default-features =
 redis = { version = "*", features = ["tokio-comp"] }
 futures = { version = "*" }
 jsonwebtoken = "*"
+clap = { version = "3.0", features = ["derive"] }
 
 [features]
 slow_tests = [] # This is only used to run slow tests. No effects on release code

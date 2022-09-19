@@ -2,3 +2,4 @@
 **/*.rs.bk
 /rasp-target
 graphql_cache.tar.gz
+/redis_conf

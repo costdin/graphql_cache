@@ -122,7 +122,9 @@ async fn update_cache<'a>(
                     (CacheScope::PRIVATE, None) => continue,
                 };
 
-                cache.insert(cache_key, hint.max_age, cache_value).await;
+                if let Err(err) = cache.insert(cache_key, hint.max_age, cache_value).await {
+                    println!("Cache Error");
+                }
             }
         }
     }

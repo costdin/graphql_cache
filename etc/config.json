@@ -1,0 +1,5 @@
+{
+    "redis_connection_string": "redis://:pass@127.0.0.1",
+    "oidc_token_header": "x-auth",
+    "oidc_configuration_endpoint": "https://dev-543704.oktapreview.com/oauth2/default/.well-known/openid-configuration"
+}

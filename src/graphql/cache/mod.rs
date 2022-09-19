@@ -1,4 +1,5 @@
 mod cache;
+mod error;
 mod memory_cache;
 mod redis_cache;
 
