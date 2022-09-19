@@ -58,7 +58,8 @@ pub fn authorize_header(
                 let mut splitted = v.split_whitespace();
                 match (splitted.next(), splitted.next()) {
                     (Some("Bearer"), Some(token)) => {
-                        match decode::<Claims>(&token, &keys[0], &Validation::new(Algorithm::RS256)) {
+                        match decode::<Claims>(&token, &keys[0], &Validation::new(Algorithm::RS256))
+                        {
                             Ok(token) => Some(AuthHeader {
                                 sub: token.claims.sub,
                                 header: v,
@@ -66,10 +67,10 @@ pub fn authorize_header(
                             Err(e) => {
                                 println!("Error: {}", e);
                                 None
-                            },    
+                            }
                         }
-                    },
-                    _ => None 
+                    }
+                    _ => None,
                 }
             }
             (None, _) => None,
