@@ -65,21 +65,18 @@ async fn main() {
             }
         };
 
-    let end = warp::path("end").and_then(end);
+    let end = warp::path("end").map(|| {
+        exit(0);
+        ""
+    });
     let endpoint = warp::path("hello")
         .and(warp::addr::remote())
         .and(warp::body::json())
         .and(authorize_header(Arc::new(auth_configuration)))
-        .and_then(move |c, d, auth_token| stuff(c, d, auth_token, cache.clone()));
+        .and_then(move |c, d, auth_token| handle_request(c, d, auth_token, cache.clone()));
 
     let routes = endpoint.or(end);
     warp::serve(routes).run(([0, 0, 0, 0], 3033)).await;
-}
-
-async fn end() -> Result<impl warp::Reply, Infallible> {
-    exit(0);
-
-    Ok(format!("nein"))
 }
 
 async fn forward_graphql_request<'a>(
@@ -140,7 +137,7 @@ async fn forward_graphql_request<'a>(
     }
 }
 
-async fn stuff(
+async fn handle_request(
     _addr_opt: Option<SocketAddr>,
     mut body: HashMap<String, Value>,
     auth_header: Option<AuthHeader>,

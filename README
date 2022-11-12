@@ -1,0 +1,25 @@
+A (toy) GraphQL Cache server written in Rust
+
+This started as an exercise to learn both Rust and GraphQL. The parser should
+be compliant with the June 2018 GraphQL specs (http://spec.graphql.org/June2018/)
+
+The proxy supports the Apollo Cache Control Specification
+(https://github.com/apollographql/apollo-cache-control), that has been deprecated
+since I started working on this. But that's fine, this was never supposed to be
+production ready. Besides, cache hints are processed in
+`GraphQLResponse.compress_cache_hints`, it should be sufficient to amend that
+method in order to support a different spec.
+
+The proxy can expand fragments and remove duplicate fields. The cache is
+granular to the individual field, so if different fields have different cache
+directives, they are cached separatly. This allows the proxy to compose a
+cached response from multiple past requests. This may not be of much use in
+production compared to more pragmatic approaches (such as caching the entire
+responses using the most restrictive directive), but it was a good exercise.
+
+I have started working on adding support for authorization using JWT tokens.
+This work is not finished yet.
+
+`build_rasp.ps1` builds the solution using `cross` and deploys it to a
+Raspeberry Pi Zero that would never be able to build this project in less than
+a day.
